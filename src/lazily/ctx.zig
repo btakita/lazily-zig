@@ -1,19 +1,19 @@
 const std = @import("std");
 
-pub fn LazySlotStrategy(comptime T: type) enum { ptr, inl } {
+pub fn LazySlotStrategy(comptime T: type) enum { direct, indirect } {
     const type_info = @typeInfo(T);
     // Determine if T is a pointer type
     const is_pointer = type_info == .pointer;
 
     // Storage strategy: inline for pointers/slices, heap pointer for others
-    return if (is_pointer) .inl else .ptr;
+    return if (is_pointer) .direct else .indirect;
 }
 
 pub fn LazySlotValuePtr(comptime T: type) type {
     const strategy = LazySlotStrategy(T);
     return switch (strategy) {
-        .ptr => *T,
-        .inl => T,
+        .indirect => *T,
+        .direct => T,
     };
 }
 
@@ -21,23 +21,23 @@ pub fn LazySlot(comptime T: type) type {
     const strategy = LazySlotStrategy(T);
     return struct {
         ctx: *LazyContext,
-        value: LazySlotValuePtr(T),
+        ptr: LazySlotValuePtr(T),
         deinit: *const fn (*LazyContext, T) void,
-        is_ptr_strategy: bool = strategy == .ptr,
+        is_indirect: bool = strategy == .indirect,
 
         pub fn get(self: @This()) T {
             switch (strategy) {
-                .ptr => return self.value.*,
-                .inl => return self.value,
+                .indirect => return self.ptr.*,
+                .direct => return self.ptr,
             }
         }
 
         pub fn to_cache(self: @This()) LazySlotCache {
             return .{
                 .ctx = self.ctx,
-                .value = @ptrCast(@constCast(self.value)),
+                .ptr = @ptrCast(@constCast(self.ptr)),
                 .deinit = @ptrCast(self.deinit),
-                .is_ptr_strategy = self.is_ptr_strategy,
+                .is_indirect = self.is_indirect,
             };
         }
     };
@@ -45,26 +45,26 @@ pub fn LazySlot(comptime T: type) type {
 
 pub const LazySlotCache = struct {
     ctx: *LazyContext,
-    value: *anyopaque,
+    ptr: *anyopaque,
     deinit: *const fn (*LazyContext, *anyopaque) void,
-    is_ptr_strategy: bool,
+    is_indirect: bool,
 
     pub fn from_cache(self: @This(), comptime T: type) LazySlot(T) {
         const strategy = comptime LazySlotStrategy(T);
         return .{
             .ctx = self.ctx,
-            .value = switch (strategy) {
-                .ptr => @ptrCast(@alignCast(self.value)),
-                .inl => blk: {
+            .ptr = switch (strategy) {
+                .indirect => @ptrCast(@alignCast(self.ptr)),
+                .direct => blk: {
                     // For .inl (pointer types like []const u8), we need to:
-										// 1. Cast the opaque pointer back to the original const-correct type
-										// 2. Preserve the const qualifier from T
+                    // 1. Cast the opaque pointer back to the original const-correct type
+                    // 2. Preserve the const qualifier from T
                     const ValueType = LazySlotValuePtr(T);
-                    break :blk @as(ValueType, @ptrCast(@alignCast(self.value)));
+                    break :blk @as(ValueType, @ptrCast(@alignCast(self.ptr)));
                 },
             },
             .deinit = @ptrCast(self.deinit),
-            .is_ptr_strategy = self.is_ptr_strategy,
+            .is_indirect = self.is_indirect,
         };
     }
 };
@@ -95,13 +95,13 @@ pub const LazyContext = struct {
         while (iter.next()) |entry| {
             const slot_opaque = entry.value_ptr;
             if (slot_opaque.deinit) |deinit_fn| {
-                if (slot_opaque.value) |data| {
+                if (slot_opaque.ptr) |data| {
                     deinit_fn(self, data);
                 }
             }
-            if (slot_opaque.is_ptr_strategy) {
-                // Then destroy the wrapper pointer itself (for .ptr strategy values)
-                self.allocator.destroy(@as(*anyopaque, @ptrCast(slot_opaque.value)));
+            if (slot_opaque.is_indirect) {
+                // Then destroy the wrapper pointer itself (for .wrap strategy values)
+                self.allocator.destroy(@as(*anyopaque, @ptrCast(slot_opaque.ptr)));
             }
         }
         self.cache.deinit();

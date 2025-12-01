@@ -23,7 +23,7 @@ pub fn Lazy(comptime T: type) type {
                 // const lazy_slot = @as(*T, @ptrCast(@alignCast(entry.value))).*;
                 const lazy_slot = entry.value;
                 if (lazy_slot.deinit) |deinit| {
-                    if (lazy_slot.value) |data| {
+                    if (lazy_slot.ptr) |data| {
                         deinit(self.ctx, data);
                     }
                 }
@@ -46,8 +46,8 @@ pub fn lazy(
     if (ctx.cache.get(key)) |lazy_slot| {
         const strategy = comptime LazySlotStrategy(T);
         return switch (strategy) {
-            .ptr => @as(T, @ptrCast(@alignCast(lazy_slot.value))).*,
-            .inl => @as(T, @ptrCast(@alignCast(lazy_slot.value))),
+            .indirect => @as(T, @ptrCast(@alignCast(lazy_slot.ptr))).*,
+            .direct => @as(T, @ptrCast(@alignCast(lazy_slot.ptr))),
         };
     }
 
@@ -59,17 +59,17 @@ pub fn lazy(
     const strategy = comptime LazySlotStrategy(T);
     const slot = LazySlot(T){
         .ctx = ctx,
-        .value = switch (strategy) {
-            .ptr => blk: {
+        .ptr = switch (strategy) {
+            .indirect => blk: {
                 const stored = try ctx.allocator.create(T);
                 stored.* = computed.value;
                 break :blk stored;
             },
-            .inl => computed.value,
+            .direct => computed.value,
         },
         .deinit = switch (strategy) {
-            .ptr => ptr_deinit_wrapper(T, computed.deinit),
-            .inl => computed.deinit,
+            .indirect => ptr_deinit_wrapper(T, computed.deinit),
+            .direct => computed.deinit,
         },
     };
     try ctx.cache.put(key, slot.to_cache());
@@ -101,15 +101,14 @@ pub fn deinit_value(comptime T: type) *const fn (*LazyContext, T) void {
             defer ctx.mutex.unlock();
 
             const strategy = comptime LazySlotStrategy(T);
-
             switch (strategy) {
-                .ptr => {
+                .indirect => {
                     // T is not a pointer, check for deinit method
                     if (comptime @typeInfo(T) == .@"struct" and @hasDecl(T, "deinit")) {
                         val.deinit();
                     }
                 },
-                .inl => {
+                .direct => {
                     // T is a pointer/slice type, free the memory
                     ctx.allocator.free(val);
                 },

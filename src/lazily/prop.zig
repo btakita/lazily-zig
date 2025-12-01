@@ -14,7 +14,7 @@ pub const LazyProperty = struct {
 
                 // Check if already computed
                 if (self.ctx.cache.get(cache_key)) |lazy_val| {
-                    return @as(*T, @ptrCast(@alignCast(lazy_val.value))).*;
+                    return @as(*T, @ptrCast(@alignCast(lazy_val.ptr))).*;
                 }
 
                 // Compute and cache
@@ -24,7 +24,7 @@ pub const LazyProperty = struct {
 
                 try self.ctx.cache.put(cache_key, LazySlot(T){
                     .ctx = self.ctx,
-                    .value = @ptrCast(stored),
+                    .ptr = @ptrCast(stored),
                     .deinit = null,
                 });
 
