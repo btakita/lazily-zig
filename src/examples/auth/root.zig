@@ -11,9 +11,6 @@ fn authenticate() []const u8 {
     return "very_secret_token";
 }
 
-// FFI-safe lazy computation
-const LazyHandle = opaque {};
-
 fn get_auth_token(ctx: *LazyContext) !LazyComputed([]const u8) {
     const token = authenticate();
     const owned = try ctx.allocator.dupe(u8, token);

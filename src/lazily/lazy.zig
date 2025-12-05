@@ -11,7 +11,7 @@ pub fn Lazy(comptime T: type) type {
         compute: *const fn (*LazyContext) T,
 
         pub fn get(self: @This()) !T {
-            return lazy(self.ctx, T, self.compute);
+            return lazy_slot(self.ctx, T, self.compute);
         }
 
         pub fn reset(self: @This()) void {
@@ -20,9 +20,9 @@ pub fn Lazy(comptime T: type) type {
             defer self.ctx.mutex.unlock();
 
             if (self.ctx.cache.fetchRemove(key)) |entry| {
-                const lazy_slot = entry.value;
-                if (lazy_slot.deinit) |deinit| {
-                    if (lazy_slot.ptr) |data| {
+                const _lazy_slot = entry.value;
+                if (_lazy_slot.deinit) |deinit| {
+                    if (_lazy_slot.ptr) |data| {
                         deinit(self.ctx, data);
                     }
                 }
@@ -31,7 +31,7 @@ pub fn Lazy(comptime T: type) type {
     };
 }
 
-pub fn lazy(
+pub fn lazy_slot(
     comptime T: type,
     ctx: *LazyContext,
     compute: *const fn (*LazyContext) anyerror!LazyComputed(T),
@@ -42,11 +42,11 @@ pub fn lazy(
     defer ctx.mutex.unlock();
 
     // Check cache
-    if (ctx.cache.get(key)) |lazy_slot| {
+    if (ctx.cache.get(key)) |_lazy_slot| {
         const strategy = comptime LazySlotStrategy(T);
         return switch (strategy) {
-            .indirect => @as(T, @ptrCast(@alignCast(lazy_slot.ptr))).*,
-            .direct => @as(T, @ptrCast(@alignCast(lazy_slot.ptr))),
+            .indirect => @as(T, @ptrCast(@alignCast(_lazy_slot.ptr))).*,
+            .direct => @as(T, @ptrCast(@alignCast(_lazy_slot.ptr))),
         };
     }
 
