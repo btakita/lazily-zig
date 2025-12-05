@@ -20,7 +20,6 @@ pub fn Lazy(comptime T: type) type {
             defer self.ctx.mutex.unlock();
 
             if (self.ctx.cache.fetchRemove(key)) |entry| {
-                // const lazy_slot = @as(*T, @ptrCast(@alignCast(entry.value))).*;
                 const lazy_slot = entry.value;
                 if (lazy_slot.deinit) |deinit| {
                     if (lazy_slot.ptr) |data| {
@@ -84,8 +83,14 @@ fn ptr_deinit_wrapper(
     return struct {
         pub fn deinit(ctx: *LazyContext, val: T) void {
             user_deinit(ctx, val);
-            // TODO: What does @ptrFromInt(@intFromPtr(&val)) do?
-            ctx.allocator.destroy(@as(*T, @ptrFromInt(@intFromPtr(&val))));
+
+            const strategy = comptime LazySlotStrategy(T);
+            switch (strategy) {
+                .indirect => {
+                    ctx.allocator.destroy(&val);
+                },
+                .direct => unreachable,
+            }
         }
     }.deinit;
 }
@@ -127,13 +132,7 @@ fn LazyDeferredWrapper(comptime T: type) type {
 
 pub fn LazyComputed(comptime T: type) type {
     return struct { value: T, deinit: *const fn (*LazyContext, T) void };
-    // return LazyResult(T);
 }
-
-pub const StorageStrategy = union(enum) {
-    ptr,
-    inl,
-};
 
 pub const StringView = extern struct {
     ptr: [*]const u8, // Plain pointer for C ABI compatibility
