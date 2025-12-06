@@ -85,7 +85,7 @@ pub fn slot(
             if (computed.deinit) |user_deinit| {
                 break :blk switch (strategy) {
                     .direct => @as(DeinitFn, @ptrCast(user_deinit)),
-                    .indirect => @as(DeinitFn, @ptrCast(ptr_deinit_wrapper(T, user_deinit))),
+                    .indirect => @as(DeinitFn, @ptrCast(deinitIndirect(T, user_deinit))),
                 };
             } else {
                 break :blk null;
@@ -98,7 +98,7 @@ pub fn slot(
     return computed.value;
 }
 
-fn ptr_deinit_wrapper(
+fn deinitIndirect(
     comptime T: type,
     comptime user_deinit: *const fn (*Context, T) void,
 ) *const fn (*Context, T) void {
@@ -117,11 +117,7 @@ fn ptr_deinit_wrapper(
     }.deinit;
 }
 
-fn deferred_deinit(ctx: *Context, data: *anyopaque) void {
-    ctx.allocator.destroy(data);
-}
-
-pub fn deinit_value(comptime T: type) *const fn (*Context, T) void {
+pub fn deinitValue(comptime T: type) *const fn (*Context, T) void {
     return struct {
         pub fn deinit(ctx: *Context, val: T) void {
             ctx.mutex.lock();
@@ -165,7 +161,7 @@ pub const StringView = extern struct {
     errno: c_uint,
     errmsg: ?[*]const u8,
 
-    pub fn from_slice(slice: []const u8) StringView {
+    pub fn fromSlice(slice: []const u8) StringView {
         return StringView{
             .ptr = slice.ptr,
             .len = slice.len,

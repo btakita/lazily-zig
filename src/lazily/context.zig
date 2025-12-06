@@ -27,11 +27,11 @@ pub const ContextSlot = struct {
     free: ?*const fn (std.mem.Allocator, *anyopaque) void = null,
 
     pub fn destroy(self: @This()) void {
-        self.destroy_in_cache();
+        self.destroyInCache();
         self.ctx.cache.remove(@intFromPtr(self));
     }
 
-    pub fn destroy_in_cache(self: @This()) void {
+    pub fn destroyInCache(self: @This()) void {
         if (self.deinit) |deinit| {
             deinit(self.ctx, @ptrCast(self.ptr));
         }
@@ -66,25 +66,17 @@ pub const Context = struct {
         var iter = self.cache.iterator();
         while (iter.next()) |entry| {
             const slot_cache = entry.value_ptr;
-            slot_cache.destroy_in_cache();
+            slot_cache.destroyInCache();
         }
         self.cache.deinit();
         self.allocator.destroy(self);
     }
 };
 
-pub fn context_init() ?*Context {
+export fn lazily_context_init() ?*Context {
     return Context.init(std.heap.page_allocator) catch null;
 }
 
-export fn lazily_context_init() ?*Context {
-    return context_init();
-}
-
-pub fn context_deinit(ctx: *Context) void {
-    ctx.deinit();
-}
-
 export fn lazily_context_deinit(ctx: *Context) void {
-    context_deinit(ctx);
+    ctx.deinit();
 }

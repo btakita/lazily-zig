@@ -6,30 +6,30 @@ fn authenticate() []const u8 {
     return "very_secret_token";
 }
 
-fn get_auth_token(ctx: *lazily.Context) !lazily.Computed([]const u8) {
+fn getAuthToken(ctx: *lazily.Context) !lazily.Computed([]const u8) {
     const token = authenticate();
     const owned = try ctx.allocator.dupe(u8, token);
     return .{
         .value = owned,
-        .deinit = lazily.deinit_value([]const u8),
+        .deinit = lazily.deinitValue([]const u8),
     };
 }
 
-pub fn lazy_auth_token(ctx: *lazily.Context) ![]const u8 {
+pub fn lazyAuthToken(ctx: *lazily.Context) ![]const u8 {
     return try lazily.slot([]const u8, ctx, struct {
         fn call(call_ctx: *lazily.Context) !lazily.Computed([]const u8) {
             const token = authenticate();
             const owned = try call_ctx.allocator.dupe(u8, token);
             return lazily.Computed([]const u8){
                 .value = owned,
-                .deinit = lazily.deinit_value([]const u8),
+                .deinit = lazily.deinitValue([]const u8),
             };
         }
     }.call);
 }
 
-export fn ffi_lazy_auth_token(ctx: *lazily.Context) callconv(.c) lazily.StringView {
-    const token = lazy_auth_token(ctx) catch |err| {
+export fn lazyAuthTokenFFI(ctx: *lazily.Context) callconv(.c) lazily.StringView {
+    const token = lazyAuthToken(ctx) catch |err| {
         return lazily.StringView{
             .ptr = &.{},
             .len = 0,
@@ -37,5 +37,5 @@ export fn ffi_lazy_auth_token(ctx: *lazily.Context) callconv(.c) lazily.StringVi
             .errmsg = @errorName(err).ptr,
         };
     };
-    return lazily.StringView.from_slice(token);
+    return lazily.StringView.fromSlice(token);
 }
