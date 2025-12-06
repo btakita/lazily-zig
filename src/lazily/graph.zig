@@ -1,10 +1,10 @@
 const std = @import("std");
-const LazyContext = @import("./ctx").LazyContext;
+const Context = @import("./context.zig").Context;
 
-pub const LazyGraph = struct {
+pub const Graph = struct {
     dependencies: std.AutoHashMap(usize, std.ArrayList(usize)),
 
-    pub fn invalidate(self: *LazyGraph, ctx: *LazyContext, key: usize) void {
+    pub fn invalidate(self: *Graph, ctx: *Context, key: usize) void {
         // Remove this key
         ctx.cache.remove(key);
 
