@@ -2,7 +2,6 @@
 const std = @import("std");
 const ctx_mod = @import("./lazily/context.zig");
 pub const Context = ctx_mod.Context;
-pub const Slot = ctx_mod.Slot;
 pub const context_init = ctx_mod.context_init;
 pub const context_deinit = ctx_mod.context_deinit;
 pub const Graph = @import("./lazily/graph.zig").Graph;

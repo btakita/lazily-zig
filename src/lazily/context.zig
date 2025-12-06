@@ -17,92 +17,42 @@ pub fn SlotValuePtr(comptime T: type) type {
     };
 }
 
-pub fn Slot(comptime T: type) type {
-    const strategy = SlotStrategy(T);
-    return struct {
-        ctx: *Context,
-        ptr: SlotValuePtr(T),
-        deinit: ?*const fn (*Context, T) void,
-        is_indirect: bool = strategy == .indirect,
+pub const DeinitFn = ?*const fn (*Context, *anyopaque) void;
 
-        pub fn get(self: @This()) T {
-            switch (strategy) {
-                .indirect => return self.ptr.*,
-                .direct => return self.ptr,
-            }
-        }
-
-        pub fn to_cache(self: @This()) SlotCache {
-            return .{
-                .ctx = self.ctx,
-                .ptr = @ptrCast(@constCast(self.ptr)),
-                .deinit = @ptrCast(self.deinit),
-                .is_indirect = self.is_indirect,
-            };
-        }
-    };
-}
-
-pub const SlotCache = struct {
+pub const ContextSlot = struct {
     ctx: *Context,
     ptr: *anyopaque,
     is_indirect: bool,
-    deinit: ?*const fn (*Context, *anyopaque) void,
+    deinit: DeinitFn,
     free: ?*const fn (std.mem.Allocator, *anyopaque) void = null,
 
-    pub fn from_cache(self: @This(), comptime T: type) Slot(T) {
-        const strategy = comptime SlotStrategy(T);
-        return .{
-            .ctx = self.ctx,
-            .ptr = switch (strategy) {
-                .indirect => @ptrCast(@alignCast(self.ptr)),
-                .direct => blk: {
-                    // For .inl (pointer types like []const u8), we need to:
-                    // 1. Cast the opaque pointer back to the original const-correct type
-                    // 2. Preserve the const qualifier from T
-                    const ValueType = SlotValuePtr(T);
-                    break :blk @as(ValueType, @ptrCast(@alignCast(self.ptr)));
-                },
-            },
-            .deinit = @ptrCast(self.deinit),
-            .is_indirect = self.is_indirect,
-        };
+    pub fn destroy(self: @This()) void {
+        self.destroy_in_cache();
+        self.ctx.cache.remove(@intFromPtr(self));
+    }
+
+    pub fn destroy_in_cache(self: @This()) void {
+        if (self.deinit) |deinit| {
+            deinit(self.ctx, @ptrCast(self.ptr));
+        }
+        if (self.free) |free| {
+            free(self.ctx.allocator, self.ptr);
+        }
     }
 };
-
-fn ptr_deinit_wrapper(
-    comptime T: type,
-    comptime user_deinit: ?*const fn (*Context, T) void,
-) *const fn (*Context, T) void {
-    return struct {
-        pub fn deinit(ctx: *Context, val: T) void {
-            if (user_deinit) |deinit_fn| {
-                deinit_fn(ctx, val);
-            }
-
-            const strategy = comptime SlotStrategy(T);
-            switch (strategy) {
-                .indirect => {
-                    ctx.allocator.destroy(@as(*T, @ptrCast(&val)));
-                },
-                .direct => unreachable,
-            }
-        }
-    }.deinit;
-}
 
 // Context with lazy cache
 pub const Context = struct {
     allocator: std.mem.Allocator,
     // Function pointer -> cached result
-    cache: std.AutoHashMap(usize, SlotCache),
+    cache: std.AutoHashMap(usize, ContextSlot),
     mutex: std.Thread.Mutex,
 
     pub fn init(allocator: std.mem.Allocator) !*Context {
         const ctx = try allocator.create(Context);
         ctx.* = .{
             .allocator = allocator,
-            .cache = std.AutoHashMap(usize, SlotCache).init(allocator),
+            .cache = std.AutoHashMap(usize, ContextSlot).init(allocator),
             .mutex = .{},
         };
         return ctx;
@@ -116,13 +66,7 @@ pub const Context = struct {
         var iter = self.cache.iterator();
         while (iter.next()) |entry| {
             const slot_cache = entry.value_ptr;
-            if (slot_cache.deinit) |deinit_fn| {
-                deinit_fn(self, slot_cache.ptr);
-            }
-            if (slot_cache.is_indirect) {
-                // Destroy the wrapper pointer itself using the type-aware free function
-                slot_cache.free.?(self.allocator, slot_cache.ptr);
-            }
+            slot_cache.destroy_in_cache();
         }
         self.cache.deinit();
         self.allocator.destroy(self);

@@ -1,7 +1,8 @@
 const std = @import("std");
 const ctx_mod = @import("./context.zig");
 const Context = ctx_mod.Context;
-const Slot = ctx_mod.Slot;
+const DeinitFn = ctx_mod.DeinitFn;
+const Slot = ctx_mod.ContextSlot;
 const SlotStrategy = ctx_mod.SlotStrategy;
 
 // Macro-like lazy wrapper using comptime
@@ -69,25 +70,30 @@ pub fn slot(
         else
             null;
 
-    const lazy_slot = Slot(T){
+    const context_slot = Slot{
         .ctx = ctx,
         .ptr = switch (strategy) {
+            .direct => @ptrCast(@constCast(computed.value)),
             .indirect => blk: {
                 const stored = try ctx.allocator.create(T);
                 stored.* = computed.value;
                 break :blk stored;
             },
-            .direct => computed.value,
         },
-        .deinit = switch (strategy) {
-            .indirect => ptr_deinit_wrapper(T, computed.deinit),
-            .direct => computed.deinit,
+        .is_indirect = strategy == .indirect,
+        .deinit = blk: {
+            if (computed.deinit) |user_deinit| {
+                break :blk switch (strategy) {
+                    .direct => @as(DeinitFn, @ptrCast(user_deinit)),
+                    .indirect => @as(DeinitFn, @ptrCast(ptr_deinit_wrapper(T, user_deinit))),
+                };
+            } else {
+                break :blk null;
+            }
         },
+        .free = free,
     };
-
-    var slot_cache = lazy_slot.to_cache();
-    slot_cache.free = free;
-    try ctx.cache.put(key, slot_cache);
+    try ctx.cache.put(key, context_slot);
 
     return computed.value;
 }
@@ -147,7 +153,10 @@ fn LazyDeferredWrapper(comptime T: type) type {
 }
 
 pub fn Computed(comptime T: type) type {
-    return struct { value: T, deinit: ?*const fn (*Context, T) void };
+    return struct {
+        value: T,
+        deinit: ?*const fn (*Context, T) void,
+    };
 }
 
 pub const StringView = extern struct {
