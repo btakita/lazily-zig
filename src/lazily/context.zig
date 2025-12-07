@@ -2,10 +2,8 @@ const std = @import("std");
 
 pub fn getSlotStrategy(comptime T: type) enum { direct, indirect } {
     const type_info = @typeInfo(T);
-    // Determine if T is a pointer type
     const is_pointer = type_info == .pointer;
-
-    // Storage strategy: inline for pointers/slices, heap pointer for others
+    // Storage strategy: .direct for pointers/slices, .indirect others
     return if (is_pointer) .direct else .indirect;
 }
 
@@ -21,23 +19,46 @@ pub fn isPointer(comptime T: type) bool {
     return type_info.pointer.size == .One;
 }
 
-pub fn SliceValue(comptime T: type) type {
-    return struct {
-        ptr: [*]const T,
-        len: usize,
+// Type-erased slice handler that works with any element type
+pub const SliceValue = struct {
+    ptr: *anyopaque,
+    len: usize, // Number of elements (not bytes)
+    element_size: usize, // @sizeOf(T)
+    free: *const fn (std.mem.Allocator, *anyopaque, usize, usize) void,
+};
+
+// Create a SliceHandler for any slice type
+pub fn sliceValue(comptime T: type, slice_data: T) SliceValue {
+    const type_info = @typeInfo(T);
+    if (type_info != .pointer) {
+        @compileError("sliceValue requires a pointer/slice type");
+    }
+    const element_type = type_info.pointer.child;
+
+    return .{
+        .ptr = @ptrCast(@constCast(slice_data.ptr)),
+        .len = slice_data.len,
+        .element_size = @sizeOf(element_type),
+        .free = struct {
+            fn free(allocator: std.mem.Allocator, ptr: *anyopaque, len: usize, element_size: usize) void {
+                _ = element_size; // For debugging/validation
+                const slice: T = @as([*]element_type, @ptrCast(@alignCast(ptr)))[0..len];
+                allocator.free(slice);
+            }
+        }.free,
     };
 }
 
 pub const DeinitValue = union(enum) {
     single_ptr: *anyopaque,
-    slice: SliceValue(u8),
+    slice: SliceValue,
 };
 
 pub const DeinitFn = *const fn (*Context, DeinitValue) void;
 
 pub const ContextSlotPtr = union(enum) {
     single_ptr: *anyopaque,
-    slice: SliceValue(u8),
+    slice: SliceValue,
 };
 
 pub const ContextSlot = struct {
@@ -64,43 +85,10 @@ pub const ContextSlot = struct {
         if (self.free) |free| {
             const ptr = switch (self.ptr) {
                 .single_ptr => |p| p,
-                .slice => |s| @as(*anyopaque, @ptrCast(@constCast(s.ptr))),
+                .slice => |s| s.ptr,
             };
             free(self.ctx.allocator, ptr);
         }
-        // Handle slices directly without deinit callback
-        // if (self.pointer_size == .slice) {
-        //     const s = self.ptr.slice;
-        //     const slice_val: []const u8 = s.ptr[0..s.len];
-        //     self.ctx.allocator.free(slice_val);
-        // } else if (self.deinit) |deinit| {
-        //     // Handle non-slice direct pointers and indirect types
-        //     const ptr = self.ptr.single_ptr;
-        //     deinit(self.ctx, ptr);
-        // }
-        // if (self.free) |free| {
-        //     const ptr = self.ptr.single_ptr;
-        //     free(self.ctx.allocator, ptr);
-        // }
-        // if (self.deinit) |deinit| {
-        //     switch (self.ptr) {
-        //         .single_ptr => |p| {
-        //             deinit(self.ctx, p);
-        //         },
-        //         .slice => |s| {
-        //             // For slices, reconstruct and pass to deinit
-        //             const slice_val: []const u8 = s.ptr[0..s.len];
-        //             deinit(self.ctx, @as(*anyopaque, @ptrCast(@constCast(&slice_val))));
-        //         },
-        //     }
-        // }
-        // if (self.free) |free| {
-        //     const ptr = switch (self.ptr) {
-        //         .single_ptr => |p| p,
-        //         .slice => unreachable,
-        //     };
-        //     free(self.ctx.allocator, ptr);
-        // }
     }
 };
 
@@ -128,8 +116,8 @@ pub const Context = struct {
         // Clean up all cached values
         var iter = self.cache.iterator();
         while (iter.next()) |entry| {
-            const slot_cache = entry.value_ptr;
-            slot_cache.destroyInCache();
+            const context_slot = entry.value_ptr;
+            context_slot.destroyInCache();
         }
         self.cache.deinit();
         self.allocator.destroy(self);
