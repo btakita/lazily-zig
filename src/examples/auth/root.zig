@@ -8,40 +8,33 @@ fn authenticate() Token {
     return "very_secret_token";
 }
 
-fn getAuthToken(ctx: *lazily.Context) !lazily.Computed(Token) {
-    const token = authenticate();
-    const owned = try ctx.allocator.dupe(u8, token);
-    return .{
-        .value = owned,
-        .deinit = lazily.deinitValue(Token),
-    };
-}
+const deinitToken = lazily.deinitValue(Token);
 
-pub fn lazyAuthToken(ctx: *lazily.Context) !Token {
-    return try lazily.slot(Token, ctx, getAuthToken);
-}
-
-fn getAuthToken2(ctx: *lazily.Context) !Token {
+fn getAuthToken(ctx: *lazily.Context) !Token {
     const token = authenticate();
     const owned = try ctx.allocator.dupe(u8, token);
     return owned;
 }
 
-pub fn lazyAuthToken2(ctx: *lazily.Context) !Token {
-    return try lazily.slot2(Token, ctx, getAuthToken2, lazily.deinitValue(Token));
+pub fn lazyAuthToken(ctx: *lazily.Context) !Token {
+    return try lazily.slot(Token, ctx, getAuthToken, deinitToken);
 }
 
-pub const lazyAuthToken3 = (lazily.Slot(Token){ .call = struct {
-    fn call(ctx: *lazily.Context) !lazily.Computed(Token) {
-        const token = authenticate();
-        const owned = try ctx.allocator.dupe(u8, token);
-        ctx.deferring(lazily.deinitValue([]const u8));
-        return owned;
-    }
-}.call }).def();
+fn getAuthToken2(ctx: *lazily.Context) !lazily.Computed(Token) {
+    const token = authenticate();
+    const owned = try ctx.allocator.dupe(u8, token);
+    return .{
+        .value = owned,
+        .deinit = deinitToken,
+    };
+}
+
+pub fn lazyAuthToken2(ctx: *lazily.Context) !Token {
+    return try lazily.slot2(Token, ctx, getAuthToken2);
+}
 
 export fn lazyAuthTokenFFI(ctx: *lazily.Context) callconv(.c) lazily.StringView {
-    const token = lazyAuthToken(ctx) catch |err| {
+    const token = lazyAuthToken2(ctx) catch |err| {
         return lazily.StringView{
             .ptr = &.{},
             .len = 0,

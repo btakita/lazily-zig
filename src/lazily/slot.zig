@@ -17,7 +17,7 @@ pub fn Lazy(comptime T: type) type {
         compute: *const fn (*Context) T,
 
         pub fn get(self: @This()) !T {
-            return slot(T, self.ctx, self.compute);
+            return slot2(T, self.ctx, self.compute);
         }
 
         pub fn reset(self: @This()) void {
@@ -52,6 +52,81 @@ pub fn Slot(comptime T: type) type {
 }
 
 pub fn slot(
+    comptime T: type,
+    ctx: *Context,
+    getValue: *const fn (*Context) anyerror!T,
+    deinit: ?DeinitFn,
+) !T {
+    const key = @intFromPtr(getValue);
+
+    // ctx.mutex.lock();
+    // defer ctx.mutex.unlock();
+
+    // Check cache
+    if (ctx.cache.get(key)) |lazy_slot| {
+        const strategy = comptime getSlotStrategy(T);
+        return switch (strategy) {
+            .indirect => @as(T, @ptrCast(@alignCast(lazy_slot.ptr.single_ptr))).*,
+            .direct => switch (lazy_slot.pointer_size) {
+                .slice => blk: {
+                    const slice_value = lazy_slot.ptr.slice;
+                    const slice: T = @as(
+                        [*]std.meta.Elem(T),
+                        @ptrCast(@alignCast(slice_value.ptr)),
+                    )[0..slice_value.len];
+                    break :blk slice;
+                },
+                .one, .many, .c => @as(T, @ptrCast(@alignCast(lazy_slot.ptr.single_ptr))),
+            },
+        };
+    }
+
+    // Compute value
+    // ctx.mutex.unlock();
+    const value = try getValue(ctx);
+    // ctx.mutex.lock();
+
+    const strategy = comptime getSlotStrategy(T);
+
+    // Create a free function that knows the type T
+    const free: ?*const fn (std.mem.Allocator, *anyopaque) void =
+        if (strategy == .indirect)
+            struct {
+                fn free(allocator: std.mem.Allocator, ptr: *anyopaque) void {
+                    allocator.destroy(@as(*T, @ptrCast(@alignCast(ptr))));
+                }
+            }.free
+        else
+            null;
+
+    const pointer_size = switch (strategy) {
+        .direct => @typeInfo(T).pointer.size,
+        .indirect => @typeInfo(*T).pointer.size,
+    };
+    const context_slot = ContextSlot{
+        .ctx = ctx,
+        .ptr = switch (strategy) {
+            .direct => switch (pointer_size) {
+                .slice => .{ .slice = sliceValue(T, value) },
+                .one, .many, .c => .{ .single_ptr = @ptrCast(@constCast(value)) },
+            },
+            .indirect => blk: {
+                const stored = try ctx.allocator.create(T);
+                stored.* = value;
+                break :blk .{ .single_ptr = @ptrCast(stored) };
+            },
+        },
+        .is_indirect = strategy == .indirect,
+        .pointer_size = pointer_size,
+        .deinit = deinit,
+        .free = if (strategy == .indirect) free else null,
+    };
+    try ctx.cache.put(key, context_slot);
+
+    return value;
+}
+
+pub fn slot2(
     comptime T: type,
     ctx: *Context,
     compute: *const fn (*Context) anyerror!Computed(T),
@@ -127,81 +202,6 @@ pub fn slot(
     try ctx.cache.put(key, context_slot);
 
     return computed.value;
-}
-
-pub fn slot2(
-    comptime T: type,
-    ctx: *Context,
-    getValue: *const fn (*Context) anyerror!T,
-    deinit: ?DeinitFn,
-) !T {
-    const key = @intFromPtr(getValue);
-
-    // ctx.mutex.lock();
-    // defer ctx.mutex.unlock();
-
-    // Check cache
-    if (ctx.cache.get(key)) |lazy_slot| {
-        const strategy = comptime getSlotStrategy(T);
-        return switch (strategy) {
-            .indirect => @as(T, @ptrCast(@alignCast(lazy_slot.ptr.single_ptr))).*,
-            .direct => switch (lazy_slot.pointer_size) {
-                .slice => blk: {
-                    const slice_value = lazy_slot.ptr.slice;
-                    const slice: T = @as(
-                        [*]std.meta.Elem(T),
-                        @ptrCast(@alignCast(slice_value.ptr)),
-                    )[0..slice_value.len];
-                    break :blk slice;
-                },
-                .one, .many, .c => @as(T, @ptrCast(@alignCast(lazy_slot.ptr.single_ptr))),
-            },
-        };
-    }
-
-    // Compute value
-    // ctx.mutex.unlock();
-    const value = try getValue(ctx);
-    // ctx.mutex.lock();
-
-    const strategy = comptime getSlotStrategy(T);
-
-    // Create a free function that knows the type T
-    const free: ?*const fn (std.mem.Allocator, *anyopaque) void =
-        if (strategy == .indirect)
-            struct {
-                fn free(allocator: std.mem.Allocator, ptr: *anyopaque) void {
-                    allocator.destroy(@as(*T, @ptrCast(@alignCast(ptr))));
-                }
-            }.free
-        else
-            null;
-
-    const pointer_size = switch (strategy) {
-        .direct => @typeInfo(T).pointer.size,
-        .indirect => @typeInfo(*T).pointer.size,
-    };
-    const context_slot = ContextSlot{
-        .ctx = ctx,
-        .ptr = switch (strategy) {
-            .direct => switch (pointer_size) {
-                .slice => .{ .slice = sliceValue(T, value) },
-                .one, .many, .c => .{ .single_ptr = @ptrCast(@constCast(value)) },
-            },
-            .indirect => blk: {
-                const stored = try ctx.allocator.create(T);
-                stored.* = value;
-                break :blk .{ .single_ptr = @ptrCast(stored) };
-            },
-        },
-        .is_indirect = strategy == .indirect,
-        .pointer_size = pointer_size,
-        .deinit = deinit,
-        .free = if (strategy == .indirect) free else null,
-    };
-    try ctx.cache.put(key, context_slot);
-
-    return value;
 }
 
 fn deinitIndirect(comptime T: type, comptime deinitFromUser: ?DeinitFn) DeinitFn {
