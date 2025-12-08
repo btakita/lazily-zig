@@ -33,6 +33,12 @@ pub fn lazyAuthToken2(ctx: *lazily.Context) !Token {
     return try lazily.slot2(Token, ctx, getAuthToken2);
 }
 
+pub const lazyAuthToken_lazyFn = lazily.lazyFn(
+    Token,
+    getAuthToken,
+    deinitToken,
+);
+
 export fn lazyAuthTokenFFI(ctx: *lazily.Context) callconv(.c) lazily.StringView {
     const token = lazyAuthToken2(ctx) catch |err| {
         return lazily.StringView{
@@ -59,4 +65,12 @@ test "lazyAuthToken2" {
     const token = try lazyAuthToken2(ctx);
     try std.testing.expectEqualStrings("very_secret_token", token);
     try std.testing.expectEqualStrings("very_secret_token", try lazyAuthToken2(ctx));
+}
+
+test "lazyFn (lazyAuthToken_lazyFn)" {
+    const ctx = try lazily.Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    const token = try lazyAuthToken_lazyFn(ctx);
+    try std.testing.expectEqualStrings("very_secret_token", token);
+    try std.testing.expectEqualStrings("very_secret_token", try lazyAuthToken_lazyFn(ctx));
 }

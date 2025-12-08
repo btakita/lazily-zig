@@ -9,12 +9,16 @@ const getSlotStrategy = ctx_mod.getSlotStrategy;
 const isSlice = ctx_mod.isSlice;
 const sliceValue = ctx_mod.sliceValue;
 
+pub fn LazyFn(comptime T: type) type {
+    return fn (*Context) anyerror!T;
+}
+
 // Macro-like lazy wrapper using comptime
 // TODO: Keep or rename?
 pub fn Lazy(comptime T: type) type {
     return struct {
         ctx: *Context,
-        compute: *const fn (*Context) T,
+        compute: *const LazyFn(T),
 
         pub fn get(self: @This()) !T {
             return slot2(T, self.ctx, self.compute);
@@ -51,10 +55,18 @@ pub fn Slot(comptime T: type) type {
     };
 }
 
+pub fn lazyFn(comptime T: type, comptime getValue: *const LazyFn(T), comptime deinit: ?DeinitFn) *const LazyFn(T) {
+    return struct {
+        fn call(ctx: *Context) anyerror!T {
+            return slot(T, ctx, getValue, deinit);
+        }
+    }.call;
+}
+
 pub fn slot(
     comptime T: type,
     ctx: *Context,
-    getValue: *const fn (*Context) anyerror!T,
+    getValue: *const LazyFn(T),
     deinit: ?DeinitFn,
 ) !T {
     const key = @intFromPtr(getValue);
@@ -268,7 +280,7 @@ fn LazyDeferredWrapper(comptime T: type) type {
 
 pub fn Compute(comptime T: type) type {
     return struct {
-        call: *const fn (*Context) anyerror!T,
+        call: *const LazyFn(T),
         deinit: ?DeinitFn,
     };
 }
