@@ -60,9 +60,10 @@ test "lazyAuthToken" {
     try std.testing.expectEqualStrings("very_secret_token", try lazyAuthToken(ctx));
 }
 
-// test "lazyAuthToken2" {
-//     const ctx = lazily.Context.init(std.testing.allocator);
-//     defer ctx.deinit();
-//     const token = try lazyAuthToken2(ctx);
-//     try std.testing.expectEqualStrings("very_secret_token", token);
-// }
+test "lazyAuthToken2" {
+    const ctx = try lazily.Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    const token = try lazyAuthToken2(ctx);
+    try std.testing.expectEqualStrings("very_secret_token", token);
+    try std.testing.expectEqualStrings("very_secret_token", try lazyAuthToken2(ctx));
+}
