@@ -9,7 +9,10 @@ pub const deinitValue = slot_mod.deinitValue;
 pub const SlotFn = slot_mod.SlotFn;
 pub const slot = slot_mod.slot;
 pub const slot2 = slot_mod.slot2;
-pub const Slot = slot_mod.Slot;
 pub const slotFn = slot_mod.slotFn;
 pub const Computed = slot_mod.Computed;
 pub const StringView = slot_mod.StringView;
+
+test {
+	std.testing.refAllDecls(@This());
+}

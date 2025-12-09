@@ -122,6 +122,11 @@ pub const Context = struct {
         self.cache.deinit();
         self.allocator.destroy(self);
     }
+
+    // This is currently for introspection and debugging purposes.
+    pub fn getContextSlot(self: @This(), fnc: *const anyopaque) ?ContextSlot {
+        return self.cache.get(@intFromPtr(fnc));
+    }
 };
 
 export fn lazily_context_init() ?*Context {
