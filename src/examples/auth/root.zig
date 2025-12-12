@@ -16,6 +16,8 @@ fn getAuthToken(ctx: *lazily.Context) !Token {
     return owned;
 }
 
+// Lazily get an Auth Token using the lazily.slot function.
+// Which accepts separate value getter function and optional deinit functions.
 pub fn lazyAuthToken(ctx: *lazily.Context) !Token {
     return try lazily.slot(Token, ctx, getAuthToken, deinitToken);
 }
@@ -29,6 +31,8 @@ fn getAuthToken2(ctx: *lazily.Context) !lazily.Computed(Token) {
     };
 }
 
+// Lazily get an Auth Token using the lazily.slot2 function.
+// Which accepts a getter function for a lazily.Computed struct that holds the value and optional deinit functions.
 pub fn lazyAuthToken2(ctx: *lazily.Context) !Token {
     return try lazily.slot2(Token, ctx, getAuthToken2);
 }

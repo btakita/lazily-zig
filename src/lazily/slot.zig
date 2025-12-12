@@ -49,6 +49,8 @@ pub fn slotFn(comptime T: type, comptime getValue: *const SlotFn(T), comptime de
     }.call;
 }
 
+// Accepts a separate value getter function and optional deinit function.
+// See slot2 for an alternative api.
 pub fn slot(
     comptime T: type,
     ctx: *Context,
@@ -124,6 +126,8 @@ pub fn slot(
     return value;
 }
 
+// Accepts a getter function for a lazily.Computed struct that holds the value and optional deinit functions.
+// See slot for an alternative api.
 pub fn slot2(
     comptime T: type,
     ctx: *Context,
