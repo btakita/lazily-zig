@@ -228,14 +228,6 @@ pub fn deinitValue(comptime T: type) DeinitFn {
     }.deinit;
 }
 
-fn LazyDeferredWrapper(comptime T: type) type {
-    return struct {
-        value: T,
-        deinit: *const fn (*Context, T) void,
-        allocator: std.mem.Allocator,
-    };
-}
-
 pub fn Compute(comptime T: type) type {
     return struct {
         call: *const SlotFn(T),
