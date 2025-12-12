@@ -13,34 +13,6 @@ pub fn SlotFn(comptime T: type) type {
     return fn (*Context) anyerror!T;
 }
 
-// Macro-like lazy wrapper using comptime
-// TODO: Keep or rename?
-pub fn Lazy(comptime T: type) type {
-    return struct {
-        ctx: *Context,
-        compute: *const SlotFn(T),
-
-        pub fn get(self: @This()) !T {
-            return slot2(T, self.ctx, self.compute);
-        }
-
-        pub fn reset(self: @This()) void {
-            const key = @intFromPtr(self.compute_fn);
-            // self.ctx.mutex.lock();
-            // defer self.ctx.mutex.unlock();
-
-            if (self.ctx.cache.fetchRemove(key)) |entry| {
-                const lazy_slot = entry.value;
-                if (lazy_slot.deinit) |deinit| {
-                    if (lazy_slot.ptr) |data| {
-                        deinit(self.ctx, data);
-                    }
-                }
-            }
-        }
-    };
-}
-
 pub fn slotFn(comptime T: type, comptime getValue: *const SlotFn(T), comptime deinit: ?DeinitFn) *const SlotFn(T) {
     return struct {
         fn call(ctx: *Context) anyerror!T {

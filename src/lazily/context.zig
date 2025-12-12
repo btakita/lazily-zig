@@ -123,7 +123,7 @@ pub const Context = struct {
         self.allocator.destroy(self);
     }
 
-    // This is currently for introspection and debugging purposes.
+    // Get a ContextSlot. ContextSlot.destroy() will deinit and remove the ContextSlot from the Context.cache.
     pub fn getContextSlot(self: @This(), fnc: *const anyopaque) ?ContextSlot {
         return self.cache.get(@intFromPtr(fnc));
     }
