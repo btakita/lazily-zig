@@ -35,21 +35,21 @@ pub fn slot(
     // defer ctx.mutex.unlock();
 
     // Check cache
-    if (ctx.cache.get(key)) |lazy_slot| {
+    if (ctx.cache.get(key)) |context_slot| {
         const strategy = comptime getSlotStrategy(T);
         return switch (strategy) {
-            .direct => switch (lazy_slot.pointer_size) {
+            .direct => switch (context_slot.pointer_size) {
                 .slice => blk: {
-                    const slice_value = lazy_slot.ptr.slice;
+                    const slice_value = context_slot.ptr.slice;
                     const slice: T = @as(
                         [*]std.meta.Elem(T),
                         @ptrCast(@alignCast(slice_value.ptr)),
                     )[0..slice_value.len];
                     break :blk slice;
                 },
-                .one, .many, .c => @as(T, @ptrCast(@alignCast(lazy_slot.ptr.single_ptr))),
+                .one, .many, .c => @as(T, @ptrCast(@alignCast(context_slot.ptr.single_ptr))),
             },
-            .indirect => @as(*T, @ptrCast(@alignCast(lazy_slot.ptr.single_ptr))).*,
+            .indirect => @as(*T, @ptrCast(@alignCast(context_slot.ptr.single_ptr))).*,
         };
     }
 
@@ -120,21 +120,21 @@ pub fn slotWithDeinit(
     // defer ctx.mutex.unlock();
 
     // Check cache
-    if (ctx.cache.get(key)) |lazy_slot| {
+    if (ctx.cache.get(key)) |context_slot| {
         const strategy = comptime getSlotStrategy(T);
         return switch (strategy) {
-            .direct => switch (lazy_slot.pointer_size) {
+            .direct => switch (context_slot.pointer_size) {
                 .slice => blk: {
-                    const slice_value = lazy_slot.ptr.slice;
+                    const slice_value = context_slot.ptr.slice;
                     const slice: T = @as(
                         [*]std.meta.Elem(T),
                         @ptrCast(@alignCast(slice_value.ptr)),
                     )[0..slice_value.len];
                     break :blk slice;
                 },
-                .one, .many, .c => @as(T, @ptrCast(@alignCast(lazy_slot.ptr.single_ptr))),
+                .one, .many, .c => @as(T, @ptrCast(@alignCast(context_slot.ptr.single_ptr))),
             },
-            .indirect => @as(*T, @ptrCast(@alignCast(lazy_slot.ptr.single_ptr))).*,
+            .indirect => @as(*T, @ptrCast(@alignCast(context_slot.ptr.single_ptr))).*,
         };
     }
 
