@@ -5,9 +5,9 @@ const DeinitFn = ctx_mod.DeinitFn;
 const ContextSlot = ctx_mod.ContextSlot;
 const ContextSlotPtr = ctx_mod.ContextSlotPtr;
 const DeinitValue = ctx_mod.DeinitValue;
-const getSlotStrategy = ctx_mod.getSlotStrategy;
 const isSlice = ctx_mod.isSlice;
 const sliceValue = ctx_mod.sliceValue;
+const SlotStrategy = ctx_mod.SlotStrategy;
 
 pub fn SlotFn(comptime T: type) type {
     return fn (*Context) anyerror!T;
@@ -36,44 +36,84 @@ pub fn slot(
 
     // Check cache
     if (ctx.cache.get(key)) |context_slot| {
-        const strategy = comptime getSlotStrategy(T);
-        return switch (strategy) {
-            .direct => switch (context_slot.pointer_size) {
-                .slice => blk: {
-                    const slice_value = context_slot.ptr.slice;
-                    const slice: T = @as(
-                        [*]std.meta.Elem(T),
-                        @ptrCast(@alignCast(slice_value.ptr)),
-                    )[0..slice_value.len];
-                    break :blk slice;
-                },
-                .one, .many, .c => @as(T, @ptrCast(@alignCast(context_slot.ptr.single_ptr))),
-            },
-            .indirect => @as(*T, @ptrCast(@alignCast(context_slot.ptr.single_ptr))).*,
-        };
+        return fromContextSlot(T, context_slot);
     }
 
     // Compute value
     const value = try getValue(ctx);
 
-    const strategy = comptime getSlotStrategy(T);
+    // Create a free function that knows the type T
+    const context_slot = try toContextSlot(T, ctx, value, deinit);
+    try ctx.cache.put(key, context_slot);
+
+    return value;
+}
+
+// Accepts a getter function for a lazily.WithDeinit struct that holds the value and optional deinit functions.
+// See slot or slotFn for alternative apis.
+pub fn slotWithDeinit(
+    comptime T: type,
+    ctx: *Context,
+    withDeinitFn: WithDeinitFn(T),
+) !T {
+    const key = @intFromPtr(withDeinitFn);
+
+    // ctx.mutex.lock();
+    // defer ctx.mutex.unlock();
+
+    // Check cache
+    if (ctx.cache.get(key)) |context_slot| {
+        return fromContextSlot(T, context_slot);
+    }
+
+    // Compute value
+    const with_deinit = try withDeinitFn(ctx);
 
     // Create a free function that knows the type T
-    const free: ?*const fn (std.mem.Allocator, *anyopaque) void =
-        if (strategy == .indirect)
-            struct {
-                fn free(allocator: std.mem.Allocator, ptr: *anyopaque) void {
-                    allocator.destroy(@as(*T, @ptrCast(@alignCast(ptr))));
-                }
-            }.free
-        else
-            null;
-
-    const pointer_size = switch (strategy) {
-        .direct => @typeInfo(T).pointer.size,
-        .indirect => @typeInfo(*T).pointer.size,
+    const value = with_deinit.value;
+    const deinit = switch (comptime SlotStrategy(T)) {
+        .direct => @as(?DeinitFn, @ptrCast(with_deinit.deinit)),
+        .indirect => deinitIndirect(T, with_deinit.deinit),
     };
-    const context_slot = ContextSlot{
+    const context_slot = try toContextSlot(T, ctx, value, deinit);
+    try ctx.cache.put(key, context_slot);
+
+    return value;
+}
+
+pub fn WithDeinitFn(comptime T: type) type {
+    return *const fn (*Context) anyerror!WithDeinit(T);
+}
+
+pub fn WithDeinit(comptime T: type) type {
+    return struct {
+        value: T,
+        deinit: ?DeinitFn,
+    };
+}
+
+fn fromContextSlot(comptime T: type, context_slot: ContextSlot) !T {
+    return switch (comptime SlotStrategy(T)) {
+        .direct => switch (context_slot.pointer_size) {
+            .slice => blk: {
+                const slice_value = context_slot.ptr.slice;
+                const slice: T = @as(
+                    [*]std.meta.Elem(T),
+                    @ptrCast(@alignCast(slice_value.ptr)),
+                )[0..slice_value.len];
+                break :blk slice;
+            },
+            .one, .many, .c => @as(T, @ptrCast(@alignCast(context_slot.ptr.single_ptr))),
+        },
+        .indirect => @as(*T, @ptrCast(@alignCast(context_slot.ptr.single_ptr))).*,
+    };
+}
+
+fn toContextSlot(comptime T: type, ctx: *Context, value: T, deinit: ?DeinitFn) !ContextSlot {
+    const strategy = comptime SlotStrategy(T);
+    const pointer_size = comptime PointerSize(T);
+    const free = comptime Free(T);
+    return ContextSlot{
         .ctx = ctx,
         .ptr = switch (strategy) {
             .direct => switch (pointer_size) {
@@ -91,98 +131,25 @@ pub fn slot(
         .deinit = deinit,
         .free = if (strategy == .indirect) free else null,
     };
-    try ctx.cache.put(key, context_slot);
-
-    return value;
 }
 
-pub fn WithDeinitFn(comptime T: type) type {
-    return *const fn (*Context) anyerror!WithDeinit(T);
-}
-
-pub fn WithDeinit(comptime T: type) type {
-    return struct {
-        value: T,
-        deinit: ?DeinitFn,
+// Create a free function that knows the type T
+fn Free(comptime T: type) ?*const fn (std.mem.Allocator, *anyopaque) void {
+    return switch (comptime SlotStrategy(T)) {
+        .indirect => struct {
+            fn free(allocator: std.mem.Allocator, ptr: *anyopaque) void {
+                allocator.destroy(@as(*T, @ptrCast(@alignCast(ptr))));
+            }
+        }.free,
+        .direct => null,
     };
 }
 
-// Accepts a getter function for a lazily.WithDeinit struct that holds the value and optional deinit functions.
-// See slot or slotFn for alternative apis.
-pub fn slotWithDeinit(
-    comptime T: type,
-    ctx: *Context,
-    withDeinitFn: WithDeinitFn(T),
-) !T {
-    const key = @intFromPtr(withDeinitFn);
-
-    // ctx.mutex.lock();
-    // defer ctx.mutex.unlock();
-
-    // Check cache
-    if (ctx.cache.get(key)) |context_slot| {
-        const strategy = comptime getSlotStrategy(T);
-        return switch (strategy) {
-            .direct => switch (context_slot.pointer_size) {
-                .slice => blk: {
-                    const slice_value = context_slot.ptr.slice;
-                    const slice: T = @as(
-                        [*]std.meta.Elem(T),
-                        @ptrCast(@alignCast(slice_value.ptr)),
-                    )[0..slice_value.len];
-                    break :blk slice;
-                },
-                .one, .many, .c => @as(T, @ptrCast(@alignCast(context_slot.ptr.single_ptr))),
-            },
-            .indirect => @as(*T, @ptrCast(@alignCast(context_slot.ptr.single_ptr))).*,
-        };
-    }
-
-    // Compute value
-    const with_deinit = try withDeinitFn(ctx);
-
-    const strategy = comptime getSlotStrategy(T);
-
-    // Create a free function that knows the type T
-    const free: ?*const fn (std.mem.Allocator, *anyopaque) void =
-        if (strategy == .indirect)
-            struct {
-                fn free(allocator: std.mem.Allocator, ptr: *anyopaque) void {
-                    allocator.destroy(@as(*T, @ptrCast(@alignCast(ptr))));
-                }
-            }.free
-        else
-            null;
-
-    const pointer_size = switch (strategy) {
+fn PointerSize(comptime T: type) std.builtin.Type.Pointer.Size {
+    return switch (comptime SlotStrategy(T)) {
         .direct => @typeInfo(T).pointer.size,
         .indirect => @typeInfo(*T).pointer.size,
     };
-    const deinit = switch (strategy) {
-        .direct => @as(?DeinitFn, @ptrCast(with_deinit.deinit)),
-        .indirect => deinitIndirect(T, with_deinit.deinit),
-    };
-    const context_slot = ContextSlot{
-        .ctx = ctx,
-        .ptr = switch (strategy) {
-            .direct => switch (pointer_size) {
-                .slice => .{ .slice = sliceValue(T, with_deinit.value) },
-                .one, .many, .c => .{ .single_ptr = @ptrCast(@constCast(with_deinit.value)) },
-            },
-            .indirect => blk: {
-                const stored = try ctx.allocator.create(T);
-                stored.* = with_deinit.value;
-                break :blk .{ .single_ptr = @ptrCast(stored) };
-            },
-        },
-        .is_indirect = strategy == .indirect,
-        .pointer_size = pointer_size,
-        .deinit = deinit,
-        .free = if (strategy == .indirect) free else null,
-    };
-    try ctx.cache.put(key, context_slot);
-
-    return with_deinit.value;
 }
 
 fn deinitIndirect(comptime T: type, comptime deinitFromUser: ?DeinitFn) DeinitFn {
@@ -192,8 +159,7 @@ fn deinitIndirect(comptime T: type, comptime deinitFromUser: ?DeinitFn) DeinitFn
                 deinitFromUser(ctx, val);
             }
 
-            const strategy = comptime getSlotStrategy(T);
-            switch (strategy) {
+            switch (comptime SlotStrategy(T)) {
                 .indirect => {
                     ctx.allocator.destroy(
                         @as(
@@ -211,9 +177,7 @@ fn deinitIndirect(comptime T: type, comptime deinitFromUser: ?DeinitFn) DeinitFn
 pub fn deinitValue(comptime T: type) DeinitFn {
     return struct {
         pub fn deinit(ctx: *Context, val: DeinitValue) void {
-            const strategy = comptime getSlotStrategy(T);
-
-            switch (strategy) {
+            switch (comptime SlotStrategy(T)) {
                 .indirect => {
                     // T is not a pointer, check for deinit method
                     if (comptime @typeInfo(T) == .@"struct" and @hasDecl(T, "deinit")) {

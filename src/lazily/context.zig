@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub fn getSlotStrategy(comptime T: type) enum { direct, indirect } {
+pub fn SlotStrategy(comptime T: type) enum { direct, indirect } {
     const type_info = @typeInfo(T);
     const is_pointer = type_info == .pointer;
     // Storage strategy: .direct for pointers/slices, .indirect others
