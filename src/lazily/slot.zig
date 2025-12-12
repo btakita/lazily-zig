@@ -22,7 +22,7 @@ pub fn slotFn(comptime T: type, comptime getValue: *const SlotFn(T), comptime de
 }
 
 // Accepts a separate value getter function and optional deinit function.
-// See slot2 for an alternative api.
+// See slotWithDeinit or slotFn for alternative apis.
 pub fn slot(
     comptime T: type,
     ctx: *Context,
@@ -96,14 +96,25 @@ pub fn slot(
     return value;
 }
 
-// Accepts a getter function for a lazily.Computed struct that holds the value and optional deinit functions.
-// See slot for an alternative api.
-pub fn slot2(
+pub fn WithDeinitFn(comptime T: type) type {
+    return *const fn (*Context) anyerror!WithDeinit(T);
+}
+
+pub fn WithDeinit(comptime T: type) type {
+    return struct {
+        value: T,
+        deinit: ?DeinitFn,
+    };
+}
+
+// Accepts a getter function for a lazily.WithDeinit struct that holds the value and optional deinit functions.
+// See slot or slotFn for alternative apis.
+pub fn slotWithDeinit(
     comptime T: type,
     ctx: *Context,
-    compute: *const fn (*Context) anyerror!Computed(T),
+    withDeinitFn: WithDeinitFn(T),
 ) !T {
-    const key = @intFromPtr(compute);
+    const key = @intFromPtr(withDeinitFn);
 
     // ctx.mutex.lock();
     // defer ctx.mutex.unlock();
@@ -128,7 +139,7 @@ pub fn slot2(
     }
 
     // Compute value
-    const computed = try compute(ctx);
+    const with_deinit = try withDeinitFn(ctx);
 
     const strategy = comptime getSlotStrategy(T);
 
@@ -148,19 +159,19 @@ pub fn slot2(
         .indirect => @typeInfo(*T).pointer.size,
     };
     const deinit = switch (strategy) {
-        .direct => @as(?DeinitFn, @ptrCast(computed.deinit)),
-        .indirect => deinitIndirect(T, computed.deinit),
+        .direct => @as(?DeinitFn, @ptrCast(with_deinit.deinit)),
+        .indirect => deinitIndirect(T, with_deinit.deinit),
     };
     const context_slot = ContextSlot{
         .ctx = ctx,
         .ptr = switch (strategy) {
             .direct => switch (pointer_size) {
-                .slice => .{ .slice = sliceValue(T, computed.value) },
-                .one, .many, .c => .{ .single_ptr = @ptrCast(@constCast(computed.value)) },
+                .slice => .{ .slice = sliceValue(T, with_deinit.value) },
+                .one, .many, .c => .{ .single_ptr = @ptrCast(@constCast(with_deinit.value)) },
             },
             .indirect => blk: {
                 const stored = try ctx.allocator.create(T);
-                stored.* = computed.value;
+                stored.* = with_deinit.value;
                 break :blk .{ .single_ptr = @ptrCast(stored) };
             },
         },
@@ -171,7 +182,7 @@ pub fn slot2(
     };
     try ctx.cache.put(key, context_slot);
 
-    return computed.value;
+    return with_deinit.value;
 }
 
 fn deinitIndirect(comptime T: type, comptime deinitFromUser: ?DeinitFn) DeinitFn {
@@ -226,20 +237,6 @@ pub fn deinitValue(comptime T: type) DeinitFn {
             }
         }
     }.deinit;
-}
-
-pub fn Compute(comptime T: type) type {
-    return struct {
-        call: *const SlotFn(T),
-        deinit: ?DeinitFn,
-    };
-}
-
-pub fn Computed(comptime T: type) type {
-    return struct {
-        value: T,
-        deinit: ?DeinitFn,
-    };
 }
 
 pub const StringView = extern struct {

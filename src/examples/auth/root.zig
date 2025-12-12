@@ -22,7 +22,7 @@ pub fn lazyAuthToken(ctx: *lazily.Context) !Token {
     return try lazily.slot(Token, ctx, getAuthToken, deinitToken);
 }
 
-fn getAuthToken2(ctx: *lazily.Context) !lazily.Computed(Token) {
+fn getAuthToken2(ctx: *lazily.Context) !lazily.WithDeinit(Token) {
     const token = authenticate();
     const owned = try ctx.allocator.dupe(u8, token);
     return .{
@@ -31,10 +31,10 @@ fn getAuthToken2(ctx: *lazily.Context) !lazily.Computed(Token) {
     };
 }
 
-// Lazily get an Auth Token using the lazily.slot2 function.
-// Which accepts a getter function for a lazily.Computed struct that holds the value and optional deinit functions.
+// Lazily get an Auth Token using the lazily.slotWithDeinit function.
+// Which accepts a getter function for a lazily.WithDeinit(T) struct that holds the value and optional deinit functions.
 pub fn lazyAuthToken2(ctx: *lazily.Context) !Token {
-    return try lazily.slot2(Token, ctx, getAuthToken2);
+    return try lazily.slotWithDeinit(Token, ctx, getAuthToken2);
 }
 
 pub const lazyAuthToken_slotFn = lazily.slotFn(

@@ -4,14 +4,15 @@ const ctx_mod = @import("./lazily/context.zig");
 pub const Context = ctx_mod.Context;
 pub const Graph = @import("./lazily/graph.zig").Graph;
 const slot_mod = @import("./lazily/slot.zig");
-pub const Compute = slot_mod.Compute;
+pub const Compute = slot_mod.WithDeinitFn;
 pub const deinitValue = slot_mod.deinitValue;
 pub const SlotFn = slot_mod.SlotFn;
 pub const slot = slot_mod.slot;
-pub const slot2 = slot_mod.slot2;
+pub const slotWithDeinit = slot_mod.slotWithDeinit;
 pub const slotFn = slot_mod.slotFn;
-pub const Computed = slot_mod.Computed;
 pub const StringView = slot_mod.StringView;
+pub const WithDeinit = slot_mod.WithDeinit;
+pub const WithDeinitFn = slot_mod.WithDeinitFn;
 
 test {
 	std.testing.refAllDecls(@This());
