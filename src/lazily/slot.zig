@@ -54,9 +54,7 @@ pub fn slot(
     }
 
     // Compute value
-    // ctx.mutex.unlock();
     const value = try getValue(ctx);
-    // ctx.mutex.lock();
 
     const strategy = comptime getSlotStrategy(T);
 
@@ -130,9 +128,7 @@ pub fn slot2(
     }
 
     // Compute value
-    // ctx.mutex.unlock();
     const computed = try compute(ctx);
-    // ctx.mutex.lock();
 
     const strategy = comptime getSlotStrategy(T);
 
