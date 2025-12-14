@@ -158,10 +158,16 @@ pub fn currentSlotFor(ctx: *Context) ?*ContextSlot {
     }
     return null;
 }
-export fn lazily_context_init() ?*Context {
+export fn initContext() ?*Context {
     return Context.init(std.heap.page_allocator) catch null;
 }
+comptime {
+    @export(&initContext, .{ .name = "init_context" });
+}
 
-export fn lazily_context_deinit(ctx: *Context) void {
+export fn deinitContext(ctx: *Context) void {
     ctx.deinit();
+}
+comptime {
+    @export(&deinitContext, .{ .name = "deinit_context" });
 }
