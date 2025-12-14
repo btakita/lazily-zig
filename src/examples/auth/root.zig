@@ -20,6 +20,13 @@ fn getAuthToken(ctx: *lazily.Context) !AuthToken {
 pub fn slotAuthToken(ctx: *lazily.Context) !AuthToken {
     return try lazily.slot(AuthToken, ctx, getAuthToken, deinitAuthToken);
 }
+test "slotAuthToken" {
+    const ctx = try lazily.Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    const token = try slotAuthToken(ctx);
+    try std.testing.expectEqualStrings("very_secret_token", token);
+    try std.testing.expectEqualStrings("very_secret_token", try slotAuthToken(ctx));
+}
 
 fn getAuthTokenWithDeinit(ctx: *lazily.Context) !lazily.WithDeinit(AuthToken) {
     const auth_token = authenticate();
@@ -34,12 +41,26 @@ fn getAuthTokenWithDeinit(ctx: *lazily.Context) !lazily.WithDeinit(AuthToken) {
 pub fn slotAuthTokenWithDeinit(ctx: *lazily.Context) !AuthToken {
     return try lazily.slotWithDeinit(AuthToken, ctx, getAuthTokenWithDeinit);
 }
+test "slotAuthTokenWithDeinit" {
+    const ctx = try lazily.Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    const token = try slotAuthTokenWithDeinit(ctx);
+    try std.testing.expectEqualStrings("very_secret_token", token);
+    try std.testing.expectEqualStrings("very_secret_token", try slotAuthTokenWithDeinit(ctx));
+}
 
 pub const slotAuthToken_slotFn = lazily.slotFn(
     AuthToken,
     getAuthToken,
     deinitAuthToken,
 );
+test "slotFn (slotAuthToken_slotFn)" {
+    const ctx = try lazily.Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    const token = try slotAuthToken_slotFn(ctx);
+    try std.testing.expectEqualStrings("very_secret_token", token);
+    try std.testing.expectEqualStrings("very_secret_token", try slotAuthToken_slotFn(ctx));
+}
 
 export fn slotAuthTokenFFI(ctx: *lazily.Context) callconv(.c) lazily.StringView {
     const token = slotAuthTokenWithDeinit(ctx) catch |err| {
@@ -55,28 +76,4 @@ export fn slotAuthTokenFFI(ctx: *lazily.Context) callconv(.c) lazily.StringView 
 comptime {
     // Support both camelCase and snake_case for FFI functions that target platforms with different name conventions.
     @export(&slotAuthTokenFFI, .{ .name = "slot_auth_token_ffi" });
-}
-
-test "slotAuthToken" {
-    const ctx = try lazily.Context.init(std.testing.allocator);
-    defer ctx.deinit();
-    const token = try slotAuthToken(ctx);
-    try std.testing.expectEqualStrings("very_secret_token", token);
-    try std.testing.expectEqualStrings("very_secret_token", try slotAuthToken(ctx));
-}
-
-test "slotAuthTokenWithDeinit" {
-    const ctx = try lazily.Context.init(std.testing.allocator);
-    defer ctx.deinit();
-    const token = try slotAuthTokenWithDeinit(ctx);
-    try std.testing.expectEqualStrings("very_secret_token", token);
-    try std.testing.expectEqualStrings("very_secret_token", try slotAuthTokenWithDeinit(ctx));
-}
-
-test "slotFn (slotAuthToken_slotFn)" {
-    const ctx = try lazily.Context.init(std.testing.allocator);
-    defer ctx.deinit();
-    const token = try slotAuthToken_slotFn(ctx);
-    try std.testing.expectEqualStrings("very_secret_token", token);
-    try std.testing.expectEqualStrings("very_secret_token", try slotAuthToken_slotFn(ctx));
 }
