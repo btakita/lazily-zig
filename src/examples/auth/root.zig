@@ -11,9 +11,8 @@ fn authenticate() AuthToken {
 const deinitAuthToken = lazily.deinitValue(AuthToken);
 
 fn getAuthToken(ctx: *lazily.Context) !AuthToken {
-    const token = authenticate();
-    const owned = try ctx.allocator.dupe(u8, token);
-    return owned;
+    const auth_token = authenticate();
+    return try ctx.allocator.dupe(u8, auth_token);
 }
 
 // Lazily get an Auth Token using the lazily.slot function.
@@ -23,10 +22,9 @@ pub fn slotAuthToken(ctx: *lazily.Context) !AuthToken {
 }
 
 fn getAuthTokenWithDeinit(ctx: *lazily.Context) !lazily.WithDeinit(AuthToken) {
-    const token = authenticate();
-    const owned = try ctx.allocator.dupe(u8, token);
+    const auth_token = authenticate();
     return .{
-        .value = owned,
+        .value = try ctx.allocator.dupe(u8, auth_token),
         .deinit = deinitAuthToken,
     };
 }
