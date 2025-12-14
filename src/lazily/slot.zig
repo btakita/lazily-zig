@@ -45,7 +45,7 @@ pub fn slot(
     }
 
     // Create a free function that knows the type T
-    const context_slot_value = try computeContextSlotValue(
+    const context_slot_value = try initContextSlotValue(
         T,
         ctx,
         getValue,
@@ -60,7 +60,7 @@ fn ContextSlotValue(comptime T: type) type {
     return struct { context_slot: ContextSlot, value: T };
 }
 
-pub fn computeContextSlotValue(
+fn initContextSlotValue(
     comptime T: type,
     ctx: *Context,
     getValue: *const SlotFn(T),
