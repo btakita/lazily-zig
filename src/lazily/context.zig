@@ -63,31 +63,35 @@ pub const ContextSlotPtr = union(enum) {
 
 pub const ContextSlot = struct {
     ctx: *Context,
-    ptr: ContextSlotPtr,
+    ptr: ?ContextSlotPtr,
     is_indirect: bool,
     pointer_size: std.builtin.Type.Pointer.Size,
     deinit: ?DeinitFn,
     free: ?*const fn (std.mem.Allocator, *anyopaque) void = null,
 
-    pub fn destroy(self: @This()) void {
+    pub fn destroy(self: ContextSlot) void {
         self.destroyInCache();
         self.ctx.cache.remove(@intFromPtr(self));
     }
 
-    pub fn destroyInCache(self: @This()) void {
+    pub fn destroyInCache(self: ContextSlot) void {
         if (self.deinit) |deinit| {
-            const value = switch (self.ptr) {
-                .single_ptr => |p| DeinitValue{ .single_ptr = p },
-                .slice => |s| DeinitValue{ .slice = s },
-            };
-            deinit(self.ctx, value);
+            if (self.ptr) |ptr| {
+                const value = switch (ptr) {
+                    .single_ptr => |p| DeinitValue{ .single_ptr = p },
+                    .slice => |s| DeinitValue{ .slice = s },
+                };
+                deinit(self.ctx, value);
+            }
         }
         if (self.free) |free| {
-            const ptr = switch (self.ptr) {
-                .single_ptr => |p| p,
-                .slice => |s| s.ptr,
-            };
-            free(self.ctx.allocator, ptr);
+            if (self.ptr) |ptr| {
+                const _ptr = switch (ptr) {
+                    .single_ptr => |p| p,
+                    .slice => |s| s.ptr,
+                };
+                free(self.ctx.allocator, _ptr);
+            }
         }
     }
 };
@@ -124,15 +128,46 @@ pub const Context = struct {
     }
 
     // Get a ContextSlot. ContextSlot.destroy() will deinit and remove the ContextSlot from the Context.cache.
-    pub fn getContextSlot(self: @This(), fnc: *const anyopaque) ?ContextSlot {
+    pub fn getContextSlot(self: Context, fnc: *const anyopaque) ?ContextSlot {
         return self.cache.get(@intFromPtr(fnc));
     }
 };
 
-export fn lazily_context_init() ?*Context {
-    return Context.init(std.heap.page_allocator) catch null;
+pub const TrackingFrame = struct {
+    prev: ?*TrackingFrame,
+    ctx: *Context,
+    slot: *ContextSlot,
+};
+
+threadlocal var tracking_top: ?*TrackingFrame = null;
+
+pub fn pushTracking(frame: *TrackingFrame) void {
+    frame.prev = tracking_top;
+    tracking_top = frame;
 }
 
-export fn lazily_context_deinit(ctx: *Context) void {
+pub fn popTracking(frame: *TrackingFrame) void {
+    // In debug builds you can assert(frame == tracking_top.?).
+    tracking_top = frame.prev;
+}
+
+pub fn currentSlotFor(ctx: *Context) ?*ContextSlot {
+    var it = tracking_top;
+    while (it) |f| : (it = f.prev) {
+        if (f.ctx == ctx) return f.slot;
+    }
+    return null;
+}
+export fn initContext() ?*Context {
+    return Context.init(std.heap.page_allocator) catch null;
+}
+comptime {
+    @export(&initContext, .{ .name = "init_context" });
+}
+
+export fn deinitContext(ctx: *Context) void {
     ctx.deinit();
+}
+comptime {
+    @export(&deinitContext, .{ .name = "deinit_context" });
 }
