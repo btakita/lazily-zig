@@ -63,7 +63,7 @@ pub const ContextSlotPtr = union(enum) {
 
 pub const ContextSlot = struct {
     ctx: *Context,
-    ptr: ContextSlotPtr,
+    ptr: ?ContextSlotPtr,
     is_indirect: bool,
     pointer_size: std.builtin.Type.Pointer.Size,
     deinit: ?DeinitFn,
@@ -76,18 +76,22 @@ pub const ContextSlot = struct {
 
     pub fn destroyInCache(self: @This()) void {
         if (self.deinit) |deinit| {
-            const value = switch (self.ptr) {
-                .single_ptr => |p| DeinitValue{ .single_ptr = p },
-                .slice => |s| DeinitValue{ .slice = s },
-            };
-            deinit(self.ctx, value);
+            if (self.ptr) |ptr| {
+                const value = switch (ptr) {
+                    .single_ptr => |p| DeinitValue{ .single_ptr = p },
+                    .slice => |s| DeinitValue{ .slice = s },
+                };
+                deinit(self.ctx, value);
+            }
         }
         if (self.free) |free| {
-            const ptr = switch (self.ptr) {
-                .single_ptr => |p| p,
-                .slice => |s| s.ptr,
-            };
-            free(self.ctx.allocator, ptr);
+            if (self.ptr) |ptr| {
+                const _ptr = switch (ptr) {
+                    .single_ptr => |p| p,
+                    .slice => |s| s.ptr,
+                };
+                free(self.ctx.allocator, _ptr);
+            }
         }
     }
 };
@@ -129,6 +133,31 @@ pub const Context = struct {
     }
 };
 
+pub const TrackingFrame = struct {
+    prev: ?*TrackingFrame,
+    ctx: *Context,
+    slot: *ContextSlot,
+};
+
+threadlocal var tracking_top: ?*TrackingFrame = null;
+
+pub fn pushTracking(frame: *TrackingFrame) void {
+    frame.prev = tracking_top;
+    tracking_top = frame;
+}
+
+pub fn popTracking(frame: *TrackingFrame) void {
+    // In debug builds you can assert(frame == tracking_top.?).
+    tracking_top = frame.prev;
+}
+
+pub fn currentSlotFor(ctx: *Context) ?*ContextSlot {
+    var it = tracking_top;
+    while (it) |f| : (it = f.prev) {
+        if (f.ctx == ctx) return f.slot;
+    }
+    return null;
+}
 export fn lazily_context_init() ?*Context {
     return Context.init(std.heap.page_allocator) catch null;
 }
