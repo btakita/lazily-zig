@@ -69,12 +69,12 @@ pub const ContextSlot = struct {
     deinit: ?DeinitFn,
     free: ?*const fn (std.mem.Allocator, *anyopaque) void = null,
 
-    pub fn destroy(self: ContextSlot) void {
+    pub fn destroy(self: *ContextSlot) void {
         self.destroyInCache();
         self.ctx.cache.remove(@intFromPtr(self));
     }
 
-    pub fn destroyInCache(self: ContextSlot) void {
+    pub fn destroyInCache(self: *ContextSlot) void {
         if (self.deinit) |deinit| {
             if (self.ptr) |ptr| {
                 const value = switch (ptr) {
@@ -128,7 +128,7 @@ pub const Context = struct {
     }
 
     // Get a ContextSlot. ContextSlot.destroy() will deinit and remove the ContextSlot from the Context.cache.
-    pub fn getContextSlot(self: Context, fnc: *const anyopaque) ?ContextSlot {
+    pub fn getContextSlot(self: *Context, fnc: *const anyopaque) ?ContextSlot {
         return self.cache.get(@intFromPtr(fnc));
     }
 };
