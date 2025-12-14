@@ -146,9 +146,13 @@ fn Free(comptime T: type) ?*const fn (std.mem.Allocator, *anyopaque) void {
 }
 
 fn PointerSize(comptime T: type) std.builtin.Type.Pointer.Size {
+    return @typeInfo(SlotValueType(T)).pointer.size;
+}
+
+fn SlotValueType(comptime T: type) type {
     return switch (comptime SlotStrategy(T)) {
-        .direct => @typeInfo(T).pointer.size,
-        .indirect => @typeInfo(*T).pointer.size,
+        .direct => T,
+        .indirect => *T,
     };
 }
 
