@@ -196,12 +196,12 @@ fn toContextSlot(comptime T: type, ctx: *Context, value: T, deinit: ?DeinitFn) !
 // Create a free function that knows the type T
 fn Free(comptime T: type) ?*const fn (std.mem.Allocator, *anyopaque) void {
     return switch (comptime SlotStrategy(T)) {
+        .direct => null,
         .indirect => struct {
             fn free(allocator: std.mem.Allocator, ptr: *anyopaque) void {
                 allocator.destroy(@as(*T, @ptrCast(@alignCast(ptr))));
             }
         }.free,
-        .direct => null,
     };
 }
 
@@ -224,6 +224,7 @@ fn deinitIndirect(comptime T: type, comptime deinitFromUser: ?DeinitFn) DeinitFn
             }
 
             switch (comptime SlotStrategy(T)) {
+                .direct => unreachable,
                 .indirect => {
                     ctx.allocator.destroy(
                         @as(
@@ -232,7 +233,6 @@ fn deinitIndirect(comptime T: type, comptime deinitFromUser: ?DeinitFn) DeinitFn
                         ),
                     );
                 },
-                .direct => unreachable,
             }
         }
     }.deinit;
@@ -242,14 +242,6 @@ pub fn deinitValue(comptime T: type) DeinitFn {
     return struct {
         pub fn deinit(ctx: *Context, val: DeinitValue) void {
             switch (comptime SlotStrategy(T)) {
-                .indirect => {
-                    // T is not a pointer, check for deinit method
-                    if (comptime @typeInfo(T) == .@"struct" and @hasDecl(T, "deinit")) {
-                        // For indirect, val should be single_ptr pointing to T
-                        const t_ptr = @as(*T, @ptrCast(@alignCast(val.single_ptr)));
-                        t_ptr.deinit();
-                    }
-                },
                 .direct => {
                     // T is a pointer/slice type
                     switch (val) {
@@ -260,6 +252,14 @@ pub fn deinitValue(comptime T: type) DeinitFn {
                         .slice => |sv| {
                             sv.free(ctx.allocator, sv.ptr, sv.len, sv.element_size);
                         },
+                    }
+                },
+                .indirect => {
+                    // T is not a pointer, check for deinit method
+                    if (comptime @typeInfo(T) == .@"struct" and @hasDecl(T, "deinit")) {
+                        // For indirect, val should be single_ptr pointing to T
+                        const t_ptr = @as(*T, @ptrCast(@alignCast(val.single_ptr)));
+                        t_ptr.deinit();
                     }
                 },
             }
