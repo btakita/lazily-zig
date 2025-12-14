@@ -19,7 +19,7 @@ pub fn isPointer(comptime T: type) bool {
     return type_info.pointer.size == .One;
 }
 
-// Type-erased slice handler that works with any element type
+/// Type-erased slice handler that works with any element type
 pub const SliceValue = struct {
     ptr: *anyopaque,
     len: usize, // Number of elements (not bytes)
@@ -27,7 +27,7 @@ pub const SliceValue = struct {
     free: *const fn (std.mem.Allocator, *anyopaque, usize, usize) void,
 };
 
-// Create a SliceHandler for any slice type
+/// Create a SliceHandler for any slice type
 pub fn sliceValue(comptime T: type, slice_data: T) SliceValue {
     const type_info = @typeInfo(T);
     if (type_info != .pointer) {

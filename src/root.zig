@@ -1,5 +1,7 @@
 //! By convention, root.zig is the root source file when making a library.
 const std = @import("std");
+const cell_mod = @import("./lazily/cell.zig");
+pub const Cell = cell_mod.Cell;
 const ctx_mod = @import("./lazily/context.zig");
 pub const Context = ctx_mod.Context;
 pub const Graph = @import("./lazily/graph.zig").Graph;

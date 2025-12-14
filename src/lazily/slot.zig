@@ -26,8 +26,8 @@ pub fn slotFn(comptime T: type, comptime getValue: *const SlotFn(T), comptime de
     }.call;
 }
 
-// Accepts a separate value getter function and optional deinit function.
-// See slotWithDeinit or slotFn for alternative apis.
+/// Accepts a separate value getter function and optional deinit function.
+/// See slotWithDeinit or slotFn for alternative apis.
 pub fn slot(
     comptime T: type,
     ctx: *Context,
@@ -107,8 +107,8 @@ fn initContextSlot(comptime T: type, ctx: *Context, deinit: ?DeinitFn) ContextSl
     };
 }
 
-// Accepts a getter function for a lazily.WithDeinit struct that holds the value and optional deinit functions.
-// See slot or slotFn for alternative apis.
+/// Accepts a getter function for a lazily.WithDeinit struct that holds the value and optional deinit functions.
+/// See slot or slotFn for alternative apis.
 pub fn slotWithDeinit(
     comptime T: type,
     ctx: *Context,
