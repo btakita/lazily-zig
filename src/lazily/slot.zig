@@ -41,7 +41,7 @@ pub fn slot(
 
     // Check cache
     if (ctx.cache.get(key)) |context_slot| {
-        return fromContextSlot(T, context_slot);
+        return fromContextSlot(T, &context_slot);
     }
 
     // Create a free function that knows the type T
@@ -121,7 +121,7 @@ pub fn slotWithDeinit(
 
     // Check cache
     if (ctx.cache.get(key)) |context_slot| {
-        return fromContextSlot(T, context_slot);
+        return fromContextSlot(T, &context_slot);
     }
 
     // Compute value
@@ -150,7 +150,7 @@ pub fn WithDeinit(comptime T: type) type {
     };
 }
 
-fn fromContextSlot(comptime T: type, context_slot: ContextSlot) SlotError!T {
+fn fromContextSlot(comptime T: type, context_slot: *const ContextSlot) SlotError!T {
     const ptr = context_slot.ptr orelse return error.ContextSlotMissingPtr;
 
     return switch (comptime SlotStrategy(T)) {
