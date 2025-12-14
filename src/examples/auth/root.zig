@@ -1,16 +1,16 @@
 const std = @import("std");
 const lazily = @import("lazily");
 
-const Token = []const u8;
+const AuthToken = []const u8;
 
-fn authenticate() Token {
+fn authenticate() AuthToken {
     std.debug.print("Authenticating...\n", .{});
     return "very_secret_token";
 }
 
-const deinitToken = lazily.deinitValue(Token);
+const deinitAuthToken = lazily.deinitValue(AuthToken);
 
-fn getAuthToken(ctx: *lazily.Context) !Token {
+fn getAuthToken(ctx: *lazily.Context) !AuthToken {
     const token = authenticate();
     const owned = try ctx.allocator.dupe(u8, token);
     return owned;
@@ -18,33 +18,33 @@ fn getAuthToken(ctx: *lazily.Context) !Token {
 
 // Lazily get an Auth Token using the lazily.slot function.
 // Which accepts separate value getter function and optional deinit functions.
-pub fn slotAuthToken(ctx: *lazily.Context) !Token {
-    return try lazily.slot(Token, ctx, getAuthToken, deinitToken);
+pub fn slotAuthToken(ctx: *lazily.Context) !AuthToken {
+    return try lazily.slot(AuthToken, ctx, getAuthToken, deinitAuthToken);
 }
 
-fn getAuthToken2(ctx: *lazily.Context) !lazily.WithDeinit(Token) {
+fn getAuthTokenWithDeinit(ctx: *lazily.Context) !lazily.WithDeinit(AuthToken) {
     const token = authenticate();
     const owned = try ctx.allocator.dupe(u8, token);
     return .{
         .value = owned,
-        .deinit = deinitToken,
+        .deinit = deinitAuthToken,
     };
 }
 
 // Lazily get an Auth Token using the lazily.slotWithDeinit function.
 // Which accepts a getter function for a lazily.WithDeinit(T) struct that holds the value and optional deinit functions.
-pub fn slotAuthToken2(ctx: *lazily.Context) !Token {
-    return try lazily.slotWithDeinit(Token, ctx, getAuthToken2);
+pub fn slotAuthTokenWithDeinit(ctx: *lazily.Context) !AuthToken {
+    return try lazily.slotWithDeinit(AuthToken, ctx, getAuthTokenWithDeinit);
 }
 
 pub const slotAuthToken_slotFn = lazily.slotFn(
-    Token,
+    AuthToken,
     getAuthToken,
-    deinitToken,
+    deinitAuthToken,
 );
 
 export fn slotAuthTokenFFI(ctx: *lazily.Context) callconv(.c) lazily.StringView {
-    const token = slotAuthToken2(ctx) catch |err| {
+    const token = slotAuthTokenWithDeinit(ctx) catch |err| {
         return lazily.StringView{
             .ptr = &.{},
             .len = 0,
@@ -63,12 +63,12 @@ test "slotAuthToken" {
     try std.testing.expectEqualStrings("very_secret_token", try slotAuthToken(ctx));
 }
 
-test "slotAuthToken2" {
+test "slotAuthTokenWithDeinit" {
     const ctx = try lazily.Context.init(std.testing.allocator);
     defer ctx.deinit();
-    const token = try slotAuthToken2(ctx);
+    const token = try slotAuthTokenWithDeinit(ctx);
     try std.testing.expectEqualStrings("very_secret_token", token);
-    try std.testing.expectEqualStrings("very_secret_token", try slotAuthToken2(ctx));
+    try std.testing.expectEqualStrings("very_secret_token", try slotAuthTokenWithDeinit(ctx));
 }
 
 test "slotFn (slotAuthToken_slotFn)" {
