@@ -52,10 +52,9 @@ export fn slotAuthTokenFFI(ctx: *lazily.Context) callconv(.c) lazily.StringView 
     };
     return lazily.StringView.fromSlice(token);
 }
-
-// Support both camelCase and snake_case for FFI functions that target platforms with different name conventions.
-export fn slot_auth_token_ffi(ctx: *lazily.Context) callconv(.c) lazily.StringView {
-    return slotAuthTokenFFI(ctx);
+comptime {
+    // Support both camelCase and snake_case for FFI functions that target platforms with different name conventions.
+    @export(&slotAuthTokenFFI, .{ .name = "slot_auth_token_ffi" });
 }
 
 test "slotAuthToken" {
