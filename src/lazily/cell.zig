@@ -97,8 +97,11 @@ test "Cell: get/set + subscribe dedup + notify" {
     try std.testing.expectEqual(@as(usize, 1), TestState.called.load(.seq_cst));
 }
 
-/// Init a slot that stores the Cell with the initial value defined by getValue.
-/// deinit is called when Cell deinits.
+/// Init a slot that stores the `Cell(T)` with the initial value defined by `getValue`.
+/// `deinit` is called during `Cell.deinit`.
+/// `getValue` and `deinit` must be `comptime` because `cell()` generates a trampoline function
+/// (Zig 0.15 has no runtime closures).
+/// If you need a runtime `getValue` or `deinit`, you can create a `slot` that returns a `Cell(T)`.
 pub fn cell(
     comptime T: type,
     ctx: *ctx_mod.Context,
@@ -107,13 +110,12 @@ pub fn cell(
 ) !Cell(T) {
     const getCell = struct {
         fn call(c: *ctx_mod.Context) anyerror!Cell(T) {
-            // If you want the Cell to be created from the *slotted* T, use slot() here:
             const initial_value = try slot_mod.slot(T, c, getValue, deinit);
             return Cell(T).init(c, initial_value);
         }
     }.call;
 
-    // Cache the Cell(T) itself. ContextSlot.destroyInCache handles deiniting a slot value.
+    // Cache the `Cell(T)` itself. `ContextSlot.destroyInCache` handles deiniting the `ContextSlot`.
     return try slot_mod.slot(Cell(T), ctx, getCell, null);
 }
 

@@ -27,7 +27,7 @@ pub const SliceValue = struct {
     free: *const fn (std.mem.Allocator, *anyopaque, usize, usize) void,
 };
 
-/// Create a SliceHandler for any slice type
+/// Create a `SliceValue` for any slice type
 pub fn sliceValue(comptime T: type, slice_data: T) SliceValue {
     const type_info = @typeInfo(T);
     if (type_info != .pointer) {
