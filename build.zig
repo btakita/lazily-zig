@@ -101,13 +101,9 @@ pub fn build(b: *std.Build) void {
     // by passing `--prefix` or `-p`.
     b.installArtifact(exe);
 
-    const example_auth_mod = b.addModule("lazily_example_auth", .{
-        .root_source_file = b.path("src/examples/auth/root.zig"),
-        .target = target,
-        .imports = &.{
-            .{ .name = "lazily", .module = mod },
-        }
-    });
+    const example_auth_mod = b.addModule("lazily_example_auth", .{ .root_source_file = b.path("src/examples/auth/root.zig"), .target = target, .imports = &.{
+        .{ .name = "lazily", .module = mod },
+    } });
 
     // This creates a top level step. Top level steps have a name and can be
     // invoked by name when running `zig build` (e.g. `zig build run`).
@@ -135,11 +131,19 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
+    const cli_test_filter = b.option(
+        []const []const u8,
+        "test_filter",
+        "Test name filters",
+    );
+    const test_filter = cli_test_filter orelse &.{};
+
     // Creates an executable that will run `test` blocks from the provided module.
     // Here `mod` needs to define a target, which is why earlier we made sure to
     // set the relative field.
     const mod_tests = b.addTest(.{
         .root_module = mod,
+        .filters = test_filter,
     });
 
     // A run step that will run the test executable.
@@ -150,23 +154,35 @@ pub fn build(b: *std.Build) void {
     // hence why we have to create two separate ones.
     const exe_tests = b.addTest(.{
         .root_module = exe.root_module,
+        .filters = test_filter,
     });
 
     // A run step that will run the second test executable.
     const run_exe_tests = b.addRunArtifact(exe_tests);
 
     const example_auth_mod_tests = b.addTest(.{
-       .root_module = example_auth_mod,
+        .root_module = example_auth_mod,
+        .filters = test_filter,
     });
     const run_example_auth_mod_tests = b.addRunArtifact(example_auth_mod_tests);
+    const install_example_auth_mod_tests = b.addInstallArtifact(
+        example_auth_mod_tests,
+        .{ .dest_dir = .{ .override = .{ .custom = "tests" } } },
+    );
 
     // A top level step for running all tests. dependOn can be called multiple
     // times and since the two run steps do not depend on one another, this will
     // make the two of them run in parallel.
-    const test_step = b.step("test", "Run tests");
-    test_step.dependOn(&run_mod_tests.step);
-    test_step.dependOn(&run_exe_tests.step);
-    test_step.dependOn(&run_example_auth_mod_tests.step);
+    const run_test = b.step("test", "Run tests");
+    run_test.dependOn(&run_mod_tests.step);
+    run_test.dependOn(&run_exe_tests.step);
+    run_test.dependOn(&run_example_auth_mod_tests.step);
+
+    const install_test = b.step(
+        "install_test",
+        "Create test binaries for debugging",
+    );
+    install_test.dependOn(&install_example_auth_mod_tests.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //
