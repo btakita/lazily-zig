@@ -2,7 +2,7 @@ const std = @import("std");
 const lazily = @import("lazily");
 const Context = lazily.Context;
 const slot = lazily.slot;
-const deinitValue = lazily.deinitValue;
+const deinitSlotValue = lazily.deinitSlotValue;
 const Owned = lazily.Owned;
 const OwnedString = lazily.OwnedString;
 const StringView = lazily.StringView;
@@ -14,7 +14,7 @@ fn authenticate() []const u8 {
     return "very_secret_token";
 }
 
-const deinitAuthToken = deinitValue(AuthToken, null);
+const deinitAuthToken = deinitSlotValue(AuthToken, null);
 
 fn getAuthToken(ctx: *Context) !AuthToken {
     const auth_token = authenticate();
@@ -23,7 +23,7 @@ fn getAuthToken(ctx: *Context) !AuthToken {
 
 // Lazily get an Auth Token using the lazily.slot function.
 // Which accepts separate value getter function and optional deinit functions.
-pub fn slotAuthToken(ctx: *Context) !AuthToken {
+pub fn slotAuthToken(ctx: *Context) !*AuthToken {
     return try slot(AuthToken, ctx, getAuthToken, deinitAuthToken);
 }
 test "slotAuthToken" {

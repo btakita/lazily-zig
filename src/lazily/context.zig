@@ -1,7 +1,5 @@
 const std = @import("std");
 
-const SlotError = error{SlotMissingPtr};
-
 /// Context with lazy cache
 pub const Context = struct {
     allocator: std.mem.Allocator,
@@ -27,18 +25,17 @@ pub const Context = struct {
         // self.mutex.lock();
         // defer self.mutex.unlock();
 
-        // Clean up all cached values
-        var iter = self.cache.iterator();
-        while (iter.next()) |entry| {
-            const context_slot = entry.value_ptr.*;
-            context_slot.destroy();
+        var iter = self.cache.valueIterator();
+        while (iter.next()) |ptr| {
+            const context_slot = ptr.*;
+            context_slot.destroy(false);
         }
         self.cache.deinit();
         self.allocator.destroy(self);
     }
 
-    // Get a Slot. Slot.destroy() will deinit and remove the Slot from the Context.cache.
-    pub fn getSlot(self: *Context, comptime fnc: anytype) ?*Slot {
+    /// Get a Slot. Slot.destroy() will deinit and remove the Slot from the Context.cache.
+    pub fn getSlot(self: *Context, fnc: anytype) ?*Slot {
         const key = valueFnCacheKey(fnc);
         return self.cache.get(key);
     }
@@ -95,16 +92,175 @@ pub fn valueFnCacheKey(valueFn: anytype) usize {
 pub const Slot = struct {
     ctx: *Context,
     value_fn_ptr: ?*anyopaque,
+    cache_key: ?usize = null,
     storage: ?Storage,
     mode: Modes,
     /// Pointer classification for the cached value type (std.builtin.Type.Pointer.Size): .one, .many, .slice, .c
     ptr_size: std.builtin.Type.Pointer.Size,
-    subscribers: std.AutoHashMap(*Slot, void),
+    change_subscribers: std.AutoHashMap(*Slot, void),
     parents: std.AutoHashMap(*Slot, void),
     deinit: ?*const fn (*Slot) void,
     free: ?*const fn (std.mem.Allocator, *anyopaque) void = null,
 
-    pub const DeinitPayloadFn = *const fn (*Slot) void;
+    pub fn init(
+        comptime T: type,
+        ctx: *Context,
+        valueFn: *const ValueFn(T),
+        deinitPayload: ?DeinitPayloadFn,
+    ) !*@This() {
+        const mode = comptime Mode(T);
+        const ptr_size = comptime Slot.PtrSize(T);
+        const free = comptime Free(T);
+        const self = try ctx.allocator.create(Slot);
+        self.* = Slot{
+            .ctx = ctx,
+            .value_fn_ptr = null,
+            .mode = mode,
+            .storage = null,
+            .ptr_size = ptr_size,
+            .change_subscribers = std.AutoHashMap(
+                *Slot,
+                void,
+            ).init(ctx.allocator),
+            .parents = std.AutoHashMap(
+                *Slot,
+                void,
+            ).init(ctx.allocator),
+            .deinit = deinitPayload,
+            .free = if (mode == .indirect) free else null,
+        };
+
+        const current_slot: ?*Slot = currentSlotFor(ctx);
+        if (current_slot) |child_slot| {
+            try self.subscribeChange(child_slot);
+            // try child_slot.subscribeChange(self);
+        }
+
+        var frame = TrackingFrame{
+            .prev = null,
+            .ctx = ctx,
+            .slot = self,
+        };
+        pushTracking(&frame);
+        defer popTracking(&frame);
+
+        const value = try valueFn(ctx);
+        const stored_value = try Storage.toStoredType(T, ctx, value);
+        self.value_fn_ptr = @ptrCast(@constCast(valueFn));
+
+        self.storage = Storage.init(
+            switch (comptime Mode(T)) {
+                .direct => switch (comptime Slot.PtrSize(T)) {
+                    .slice => Slot.Storage.Payload{
+                        .slice = SliceStorage.init(T, stored_value),
+                    },
+                    .one, .many, .c => Slot.Storage.Payload{
+                        .single_ptr = @ptrCast(@constCast(stored_value)),
+                    },
+                },
+                .indirect => Slot.Storage.Payload{
+                    .single_ptr = @ptrCast(stored_value),
+                },
+            },
+        );
+        return self;
+    }
+
+    pub const GetError = error{SlotMissingPtr};
+
+    pub fn get(self: Slot, comptime T: type) GetError!Result(T) {
+        const payload = if (self.storage) |storage| blk: {
+            break :blk storage.payload;
+        } else {
+            return error.SlotMissingPtr;
+        };
+
+        return switch (comptime Mode(T)) {
+            .direct => switch (comptime Slot.PtrSize(T)) {
+                .slice => blk: {
+                    const slice_storage = payload.slice;
+                    break :blk slice_storage.toSlice(T);
+                },
+                .one, .many, .c => @as(T, @ptrCast(@alignCast(payload.single_ptr))),
+            },
+            .indirect => @as(*T, @ptrCast(@alignCast(payload.single_ptr))),
+        };
+    }
+
+    pub const GetPtrError = error{ CannotGetPtrOfDirectMode, SlotMissingPtr };
+
+    pub fn getPtr(self: Slot, comptime T: type) GetPtrError!*T {
+        const payload = if (self.storage) |storage| storage.payload else return error.SlotMissingPtr;
+        return switch (comptime Mode(T)) {
+            .direct => return error.CannotGetPtrOfDirectMode,
+            .indirect => @as(*T, @ptrCast(@alignCast(payload.single_ptr))),
+        };
+    }
+
+    pub fn subscribeChange(self: *Slot, child: *Slot) !void {
+        _ = try self.change_subscribers.getOrPut(child);
+        _ = try child.parents.getOrPut(self);
+    }
+
+    pub fn unsubscribeChange(self: *Slot, child: *Slot) void {
+        _ = self.change_subscribers.remove(child);
+        _ = child.parents.remove(self);
+    }
+
+    pub fn emitChange(self: *Slot) void {
+        var iter = self.change_subscribers.keyIterator();
+        while (iter.next()) |ptr| {
+            const dependent_slot = ptr.*;
+            dependent_slot.destroy(true);
+        }
+        // Clear the subscribers since they've been destroyed
+        self.change_subscribers.clearRetainingCapacity();
+    }
+
+    pub fn destroy(self: *Slot, recurse: ?bool) void {
+        // Remove from cache if not already cleared by Context.deinit
+        if (self.cache_key) |key| {
+            _ = self.ctx.cache.remove(key);
+        } else if (self.value_fn_ptr != null) {
+            _ = self.ctx.cache.remove(@intFromPtr(self.value_fn_ptr));
+        }
+
+        self.destroyInCache(recurse);
+
+        self.parents.deinit();
+        self.ctx.allocator.destroy(self);
+    }
+
+    /// Destroys the value and its subscribers recursively.
+    /// Used for cache invalidation.
+    pub fn destroyInCache(self: *Slot, recurse: ?bool) void {
+        if (self.storage) |storage| {
+            if (recurse == null or recurse == true) {
+                var parents_iter = self.parents.keyIterator();
+                while (parents_iter.next()) |ptr| {
+                    const parent_slot = ptr.*;
+                    parent_slot.unsubscribeChange(self);
+                }
+
+                var subscribers_iter = self.change_subscribers.keyIterator();
+                while (subscribers_iter.next()) |ptr| {
+                    const dependent_slot = ptr.*;
+                    dependent_slot.destroy(true);
+                }
+            }
+
+            if (self.deinit) |deinit_fn| {
+                deinit_fn(self);
+            }
+            if (self.mode == .indirect) {
+                if (self.free) |free_fn| {
+                    free_fn(self.ctx.allocator, storage.payload.single_ptr);
+                }
+            }
+            self.storage = null;
+            self.change_subscribers.deinit();
+        }
+    }
 
     pub const Modes = enum { direct, indirect };
     pub fn Mode(comptime T: type) Modes {
@@ -114,7 +270,7 @@ pub const Slot = struct {
         return if (is_pointer) .direct else .indirect;
     }
 
-    pub fn StoredType(comptime T: type) type {
+    pub fn Result(comptime T: type) type {
         return switch (comptime Mode(T)) {
             .direct => T,
             .indirect => *T,
@@ -122,7 +278,7 @@ pub const Slot = struct {
     }
 
     pub fn PtrSize(comptime T: type) std.builtin.Type.Pointer.Size {
-        return @typeInfo(Slot.StoredType(T)).pointer.size;
+        return @typeInfo(Slot.Result(T)).pointer.size;
     }
 
     pub fn StorageKind(comptime T: type) enum { single_ptr, slice } {
@@ -149,7 +305,7 @@ pub const Slot = struct {
         /// Converts a computed value `T` into the storage representation `StoredType(T)`.
         /// - `.direct`: no allocation, returns the value as-is
         /// - `.indirect`: allocates `T` in `ctx.allocator` and returns `*T`
-        pub fn toStoredType(comptime T: type, ctx: *Context, value: T) !StoredType(T) {
+        pub fn toStoredType(comptime T: type, ctx: *Context, value: T) !Result(T) {
             return switch (comptime Mode(T)) {
                 .direct => value,
                 .indirect => blk: {
@@ -162,6 +318,7 @@ pub const Slot = struct {
     };
 
     /// Type-erased slice handler that works with any element type
+    /// TODO: Is this needed with the addition of Owned?
     pub const SliceStorage = struct {
         ptr: *anyopaque,
         len: usize, // Number of elements (not bytes)
@@ -218,133 +375,6 @@ pub const Slot = struct {
         }
     };
 
-    pub fn init(
-        comptime T: type,
-        ctx: *Context,
-        valueFn: *const ValueFn(T),
-        deinit: ?DeinitPayloadFn,
-    ) !*@This() {
-        const mode = comptime Mode(T);
-        const ptr_size = comptime Slot.PtrSize(T);
-        const free = comptime Free(T);
-        const slot = try ctx.allocator.create(Slot);
-        slot.* = Slot{
-            .ctx = ctx,
-            .value_fn_ptr = null,
-            .mode = mode,
-            .storage = null,
-            .ptr_size = ptr_size,
-            .subscribers = std.AutoHashMap(
-                *Slot,
-                void,
-            ).init(ctx.allocator),
-            .parents = std.AutoHashMap(
-                *Slot,
-                void,
-            ).init(ctx.allocator),
-            .deinit = deinit,
-            .free = if (mode == .indirect) free else null,
-        };
-
-        const current_slot: ?*Slot = currentSlotFor(ctx);
-        if (current_slot) |parent_slot| {
-            _ = try parent_slot.subscribers.getOrPut(slot);
-            _ = try slot.parents.getOrPut(parent_slot);
-        }
-
-        var frame = TrackingFrame{
-            .prev = null,
-            .ctx = ctx,
-            .slot = slot,
-        };
-        pushTracking(&frame);
-        defer popTracking(&frame);
-
-        const value = try valueFn(ctx);
-        const stored_value = try Storage.toStoredType(T, ctx, value);
-        slot.value_fn_ptr = @ptrCast(@constCast(valueFn));
-
-        slot.storage = Storage.init(
-            switch (comptime Mode(T)) {
-                .direct => switch (comptime Slot.PtrSize(T)) {
-                    .slice => Slot.Storage.Payload{
-                        .slice = SliceStorage.init(T, stored_value),
-                    },
-                    .one, .many, .c => Slot.Storage.Payload{
-                        .single_ptr = @ptrCast(@constCast(stored_value)),
-                    },
-                },
-                .indirect => Slot.Storage.Payload{
-                    .single_ptr = @ptrCast(stored_value),
-                },
-            },
-        );
-        return slot;
-    }
-
-    pub fn get(self: Slot, comptime T: type) !T {
-        const payload = if (self.storage) |storage| blk: {
-            break :blk storage.payload;
-        } else {
-            return error.SlotMissingPtr;
-        };
-
-        return switch (comptime Mode(T)) {
-            .direct => switch (comptime Slot.PtrSize(T)) {
-                .slice => blk: {
-                    const slice_storage = payload.slice;
-                    break :blk slice_storage.toSlice(T);
-                },
-                .one, .many, .c => @as(T, @ptrCast(@alignCast(payload.single_ptr))),
-            },
-            .indirect => @as(*T, @ptrCast(@alignCast(payload.single_ptr))).*,
-        };
-    }
-
-    pub fn getPtr(self: Slot, comptime T: type) !*T {
-        const payload = if (self.storage) |storage| storage.payload else return error.SlotMissingPtr;
-        return switch (comptime Mode(T)) {
-            .direct => return error.CannotGetPtrOfDirectMode,
-            .indirect => @as(*T, @ptrCast(@alignCast(payload.single_ptr))),
-        };
-    }
-
-    pub fn destroy(self: *Slot) void {
-        self.destroyInCache();
-        var iter = self.parents.iterator();
-        while (iter.next()) |entry| {
-            const parent_slot = entry.key_ptr.*;
-            _ = parent_slot.subscribers.remove(self);
-        }
-        self.parents.deinit();
-        if (self.value_fn_ptr != null) {
-            _ = self.ctx.cache.remove(@intFromPtr(self.value_fn_ptr));
-        }
-        self.ctx.allocator.destroy(self);
-    }
-
-    /// Destroys the value and its subscribers recursively.
-    /// Used for cache invalidation.
-    pub fn destroyInCache(self: *Slot) void {
-        if (self.storage) |storage| {
-            var iter = self.subscribers.iterator();
-            while (iter.next()) |entry| {
-                const dependent_slot = entry.key_ptr.*;
-                dependent_slot.destroy();
-            }
-            if (self.deinit) |deinit_fn| {
-                deinit_fn(self);
-            }
-            if (self.mode == .indirect) {
-                if (self.free) |free_fn| {
-                    free_fn(self.ctx.allocator, storage.payload.single_ptr);
-                }
-            }
-            self.storage = null;
-            self.subscribers.deinit();
-        }
-    }
-
     /// Create a free function that knows the type `T`
     pub fn Free(comptime T: type) ?*const fn (std.mem.Allocator, *anyopaque) void {
         return switch (comptime Slot.Mode(T)) {
@@ -356,6 +386,11 @@ pub const Slot = struct {
             }.free,
         };
     }
+
+    pub fn DeinitValueFn(comptime T: type) type {
+        return *const fn (*Context, *const ValueFn(T), T) void;
+    }
+    pub const DeinitPayloadFn = *const fn (*Slot) void;
 };
 
 pub fn ValueFn(comptime T: type) type {
@@ -377,18 +412,6 @@ pub fn subscriberKey(ctx: *Context, valueFn: anytype) SubscriberKey {
 pub const SubscriberSet = std.AutoHashMap(SubscriberKey, void);
 
 const SlotCallback = *const fn (ctx: *Context, slot: *Slot) void;
-
-pub fn ValueCallback(comptime T: type) type {
-    return *const fn (ctx: *Context, new: T, old: T) void;
-}
-
-pub fn Subscriber(comptime T: type) type {
-    return struct {
-        id: SubscriberKey,
-        ctx: *Context,
-        cb: ValueCallback(T),
-    };
-}
 
 pub const TrackingFrame = struct {
     prev: ?*TrackingFrame,
