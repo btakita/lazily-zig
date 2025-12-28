@@ -419,6 +419,8 @@ pub const TrackingFrame = struct {
     slot: *Slot,
 };
 
+/// The top of the stack for the CURRENT thread.
+/// This stack may contain frames from different Contexts if they are interleaved.
 threadlocal var tracking_top: ?*TrackingFrame = null;
 
 pub fn pushTracking(frame: *TrackingFrame) void {
@@ -427,11 +429,13 @@ pub fn pushTracking(frame: *TrackingFrame) void {
 }
 
 pub fn popTracking(frame: *TrackingFrame) void {
-    // In debug builds you can assert(frame == tracking_top.?).
-    tracking_top = frame.prev;
+    // Basic safety check
+    if (tracking_top == frame) {
+        tracking_top = frame.prev;
+    }
 }
 
-// TODO: Use an AutoHashMap for faster lookup
+/// Finds the most recent slot being computed for the given context ON THIS THREAD.
 pub fn currentSlotFor(ctx: *Context) ?*Slot {
     var it = tracking_top;
     while (it) |f| : (it = f.prev) {
@@ -439,6 +443,7 @@ pub fn currentSlotFor(ctx: *Context) ?*Slot {
     }
     return null;
 }
+
 export fn initContext() ?*Context {
     return Context.init(std.heap.page_allocator) catch null;
 }
