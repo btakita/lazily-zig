@@ -1,34 +1,37 @@
 const std = @import("std");
+const build_options = @import("build_options");
 
 /// Context with lazy cache
 pub const Context = struct {
     allocator: std.mem.Allocator,
     // Function pointer -> cached result
     cache: std.AutoHashMap(usize, *Slot),
-    // mutex: std.Thread.Mutex,
+    // Use a real Mutex if multi_threaded is true, otherwise use a "no-op" struct
+    mutex: if (build_options.multi_threaded) std.Thread.Mutex else struct {
+        pub fn lock(_: *@This()) void {}
+        pub fn unlock(_: *@This()) void {}
+    } = .{},
 
     pub fn init(allocator: std.mem.Allocator) !*Context {
         const ctx = try allocator.create(Context);
         ctx.* = .{
             .allocator = allocator,
-            // Not thread-safe
             .cache = std.AutoHashMap(
                 usize,
                 *Slot,
             ).init(allocator),
-            // .mutex = .{},
         };
         return ctx;
     }
 
     pub fn deinit(self: *Context) void {
-        // self.mutex.lock();
-        // defer self.mutex.unlock();
+        self.mutex.lock();
+        // The mutex is not unlocked due to this being deinit deallocating self.
 
         var iter = self.cache.valueIterator();
         while (iter.next()) |ptr| {
             const context_slot = ptr.*;
-            context_slot.destroy(false);
+            context_slot.destroyUnlocked(false);
         }
         self.cache.deinit();
         self.allocator.destroy(self);
@@ -36,8 +39,10 @@ pub const Context = struct {
 
     /// Get a Slot. Slot.destroy() will deinit and remove the Slot from the Context.cache.
     pub fn getSlot(self: *Context, fnc: anytype) ?*Slot {
-        const key = valueFnCacheKey(fnc);
-        return self.cache.get(key);
+        const cache_key = valueFnCacheKey(fnc);
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        return self.cache.get(cache_key);
     }
 };
 
@@ -108,6 +113,22 @@ pub const Slot = struct {
         valueFn: *const ValueFn(T),
         deinitPayload: ?DeinitPayloadFn,
     ) !*@This() {
+        return initKeyed(
+            T,
+            ctx,
+            valueFnCacheKey(valueFn),
+            valueFn,
+            deinitPayload,
+        );
+    }
+
+    pub fn initKeyed(
+        comptime T: type,
+        ctx: *Context,
+        cache_key: usize,
+        valueFn: *const ValueFn(T),
+        deinitPayload: ?DeinitPayloadFn,
+    ) !*@This() {
         const mode = comptime Mode(T);
         const ptr_size = comptime Slot.PtrSize(T);
         const free = comptime Free(T);
@@ -115,6 +136,7 @@ pub const Slot = struct {
         self.* = Slot{
             .ctx = ctx,
             .value_fn_ptr = null,
+            .cache_key = cache_key,
             .mode = mode,
             .storage = null,
             .ptr_size = ptr_size,
@@ -163,6 +185,15 @@ pub const Slot = struct {
                 },
             },
         );
+
+        ctx.mutex.lock();
+        defer ctx.mutex.unlock();
+        if (ctx.cache.get(cache_key)) |existing| {
+            self.destroySelf(false);
+            return existing;
+        }
+
+        try ctx.cache.put(cache_key, self);
         return self;
     }
 
@@ -198,54 +229,75 @@ pub const Slot = struct {
     }
 
     pub fn subscribeChange(self: *Slot, child: *Slot) !void {
+        self.ctx.mutex.lock();
+        defer self.ctx.mutex.unlock();
+        try self.subscribeChangeUnlocked(child);
+    }
+
+    pub fn subscribeChangeUnlocked(self: *Slot, child: *Slot) !void {
         _ = try self.change_subscribers.getOrPut(child);
         _ = try child.parents.getOrPut(self);
     }
 
     pub fn unsubscribeChange(self: *Slot, child: *Slot) void {
+        self.ctx.mutex.lock();
+        defer self.ctx.mutex.unlock();
+        try self.unsubscribeChangeUnlocked(child);
+    }
+
+    pub fn unsubscribeChangeUnlocked(self: *Slot, child: *Slot) void {
         _ = self.change_subscribers.remove(child);
         _ = child.parents.remove(self);
     }
 
     pub fn emitChange(self: *Slot) void {
+        self.ctx.mutex.lock();
+        defer self.ctx.mutex.unlock();
+        self.emitChangeUnlocked();
+    }
+
+    pub fn emitChangeUnlocked(self: *Slot) void {
         var iter = self.change_subscribers.keyIterator();
         while (iter.next()) |ptr| {
             const dependent_slot = ptr.*;
-            dependent_slot.destroy(true);
+            dependent_slot.destroyUnlocked(true);
         }
         // Clear the subscribers since they've been destroyed
         self.change_subscribers.clearRetainingCapacity();
     }
 
     pub fn destroy(self: *Slot, recurse: ?bool) void {
+        self.ctx.mutex.lock();
+        defer self.ctx.mutex.unlock();
+        self.destroyUnlocked(recurse);
+    }
+
+    pub fn destroyUnlocked(self: *Slot, recurse: ?bool) void {
         // Remove from cache if not already cleared by Context.deinit
-        if (self.cache_key) |key| {
-            _ = self.ctx.cache.remove(key);
-        } else if (self.value_fn_ptr != null) {
-            _ = self.ctx.cache.remove(@intFromPtr(self.value_fn_ptr));
+        if (self.cache_key) |cache_key| {
+            _ = self.ctx.cache.remove(cache_key);
+        } else {
+            unreachable;
         }
 
-        self.destroyInCache(recurse);
-
-        self.parents.deinit();
-        self.ctx.allocator.destroy(self);
+        self.destroySelf(recurse);
     }
 
     /// Destroys the value and its subscribers recursively.
-    /// Used for cache invalidation.
-    pub fn destroyInCache(self: *Slot, recurse: ?bool) void {
+    /// Internal version: assumes ctx.mutex is ALREADY held.
+    pub fn destroySelf(self: *Slot, recurse: ?bool) void {
         if (self.storage) |storage| {
             if (recurse == null or recurse == true) {
                 var parents_iter = self.parents.keyIterator();
                 while (parents_iter.next()) |ptr| {
                     const parent_slot = ptr.*;
-                    parent_slot.unsubscribeChange(self);
+                    parent_slot.unsubscribeChangeUnlocked(self);
                 }
 
                 var subscribers_iter = self.change_subscribers.keyIterator();
                 while (subscribers_iter.next()) |ptr| {
                     const dependent_slot = ptr.*;
-                    dependent_slot.destroy(true);
+                    dependent_slot.destroyUnlocked(true);
                 }
             }
 
@@ -256,10 +308,16 @@ pub const Slot = struct {
                 if (self.free) |free_fn| {
                     free_fn(self.ctx.allocator, storage.payload.single_ptr);
                 }
+            } else if (self.ptr_size == .slice) {
+                // Direct slices also need to be freed if they were allocated in toStoredType
+                // However, toStoredType currently only allocates for .indirect.
+                // If toStoredType is updated to dupe slices, this would be needed.
             }
             self.storage = null;
-            self.change_subscribers.deinit();
         }
+        self.change_subscribers.deinit();
+        self.parents.deinit();
+        self.ctx.allocator.destroy(self);
     }
 
     pub const Modes = enum { direct, indirect };
