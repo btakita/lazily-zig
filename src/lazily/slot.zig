@@ -66,13 +66,13 @@ pub fn slotKeyed(
     }
 
     // Create a free function that knows the type T
-    var new_slot = try Slot.init(
+    var new_slot = try Slot.initKeyed(
         T,
         ctx,
+        key,
         valueFn,
         deinit,
     );
-    try ctx.cache.put(key, new_slot);
 
     return new_slot.get(T);
 }

@@ -111,6 +111,22 @@ pub const Slot = struct {
         valueFn: *const ValueFn(T),
         deinitPayload: ?DeinitPayloadFn,
     ) !*@This() {
+        return initKeyed(
+            T,
+            ctx,
+            valueFnCacheKey(valueFn),
+            valueFn,
+            deinitPayload,
+        );
+    }
+
+    pub fn initKeyed(
+        comptime T: type,
+        ctx: *Context,
+        key: usize,
+        valueFn: *const ValueFn(T),
+        deinitPayload: ?DeinitPayloadFn,
+    ) !*@This() {
         const mode = comptime Mode(T);
         const ptr_size = comptime Slot.PtrSize(T);
         const free = comptime Free(T);
@@ -166,6 +182,7 @@ pub const Slot = struct {
                 },
             },
         );
+        try ctx.cache.put(key, self);
         return self;
     }
 
