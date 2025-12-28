@@ -46,14 +46,14 @@ pub fn slot(
 pub fn slotKeyed(
     comptime T: type,
     ctx: *Context,
-    key: usize,
+    cache_key: usize,
     valueFn: *const ValueFn(T),
     deinit: ?DeinitPayloadFn,
 ) !Slot.Result(T) {
     ctx.mutex.lock();
 
     // Check cache
-    if (ctx.cache.get(key)) |cached_slot| {
+    if (ctx.cache.get(cache_key)) |cached_slot| {
         if (cached_slot.storage != null) {
             const current_slot: ?*Slot = currentSlotFor(ctx);
             if (current_slot) |child_slot| {
@@ -72,7 +72,7 @@ pub fn slotKeyed(
     var new_slot = try Slot.initKeyed(
         T,
         ctx,
-        key,
+        cache_key,
         valueFn,
         deinit,
     );

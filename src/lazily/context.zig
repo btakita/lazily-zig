@@ -39,10 +39,10 @@ pub const Context = struct {
 
     /// Get a Slot. Slot.destroy() will deinit and remove the Slot from the Context.cache.
     pub fn getSlot(self: *Context, fnc: anytype) ?*Slot {
-        const key = valueFnCacheKey(fnc);
+        const cache_key = valueFnCacheKey(fnc);
         self.mutex.lock();
         defer self.mutex.unlock();
-        return self.cache.get(key);
+        return self.cache.get(cache_key);
     }
 };
 
@@ -79,7 +79,7 @@ pub fn valueFnCacheKey(valueFn: anytype) usize {
     const type_info = @typeInfo(@TypeOf(valueFn));
 
     return switch (type_info) {
-    // If caller passes a function (not a pointer), take its address.
+        // If caller passes a function (not a pointer), take its address.
         .@"fn" => @intFromPtr(&valueFn),
 
         // If caller passes a function pointer, use it directly.

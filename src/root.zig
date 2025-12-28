@@ -12,7 +12,6 @@ pub const Slot = ctx_mod.Slot;
 pub const OwnedString = ctx_mod.OwnedString;
 pub const valueFnCacheKey = ctx_mod.valueFnCacheKey;
 pub const ValueFn = ctx_mod.ValueFn;
-pub const Graph = @import("./lazily/graph.zig").Graph;
 const slot_mod = @import("./lazily/slot.zig");
 pub const deinitSlotValue = slot_mod.deinitSlotValue;
 pub const slot = slot_mod.slot;
