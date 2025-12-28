@@ -73,7 +73,7 @@ const greetingAndResponse = initSlotFn(
     deinitSlotValue(OwnedString, null),
 );
 
-test "cellFn: get/set + invalidate cache" {
+test "initCellFn and initSlotFn with dependencies example" {
     const ctx = try Context.init(std.testing.allocator);
     defer ctx.deinit();
 
