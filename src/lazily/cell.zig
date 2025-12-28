@@ -370,7 +370,7 @@ test "cellFn: get/set + invalidate cache" {
 }
 
 test "multithreaded slot contention" {
-    if (!build_options.multi_threaded) {
+    if (!build_options.thread_safe) {
         return error.SkipZigTest;
     }
 
@@ -436,7 +436,7 @@ test "multithreaded slot contention" {
 }
 
 test "multithreaded Cell updates" {
-    if (!build_options.multi_threaded) {
+    if (!build_options.thread_safe) {
         return error.SkipZigTest;
     }
     var ts_allocator = std.heap.ThreadSafeAllocator{

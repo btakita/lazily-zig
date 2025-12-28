@@ -17,13 +17,13 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const multi_threaded = b.option(
+    const thread_safe = b.option(
         bool,
-        "multi_threaded",
+        "thread_safe",
         "Enable thread-safety features (default: true)",
     ) orelse true;
     const build_options = b.addOptions();
-    build_options.addOption(bool, "multi_threaded", multi_threaded);
+    build_options.addOption(bool, "thread_safe", thread_safe);
 
     // It's also possible to define more custom flags to toggle optional features
     // of this build script using `b.option()`. All defined flags (including

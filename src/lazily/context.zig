@@ -6,8 +6,8 @@ pub const Context = struct {
     allocator: std.mem.Allocator,
     // Function pointer -> cached result
     cache: std.AutoHashMap(usize, *Slot),
-    // Use a real Mutex if multi_threaded is true, otherwise use a "no-op" struct
-    mutex: if (build_options.multi_threaded) std.Thread.Mutex else struct {
+    // Use a real Mutex if thread_safe is true, otherwise use a "no-op" struct
+    mutex: if (build_options.thread_safe) std.Thread.Mutex else struct {
         pub fn lock(_: *@This()) void {}
         pub fn unlock(_: *@This()) void {}
     } = .{},
@@ -277,7 +277,7 @@ pub const Slot = struct {
     /// Where the Slot is reinstantiated the next time the slot function is called.
     ///
     /// Future plans include making the Slot instance remain but with its value cleared.
-    /// This plan will allow a Cell to keep any value changes using `Cell.set` and for the Signal implementation.
+    /// This plan will allow a Cell to keep any value changes using `Cell.set` and for the Reactor implementation.
     ///
     /// Note this function doesn't destroy the Slot itself. See Slot.touch if you want this behavior.
     ///
