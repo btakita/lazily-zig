@@ -10,64 +10,61 @@ const OwnedString = lazily.OwnedString;
 const slotEventLog = lazily.slotEventLog;
 const String = lazily.String;
 
-const hello = initCellFn(String, struct {
-    fn call(_ctx: *Context) anyerror!String {
-        try (try slotEventLog(_ctx)).append("hello|");
-        return "Hello";
-    }
-}.call, null);
+fn getHello(ctx: *Context) !String {
+    try (try slotEventLog(ctx)).append("hello|");
+    return "Hello";
+}
+pub const hello = initCellFn(
+    String,
+    getHello,
+    null,
+);
 
-const getName = struct {
-    fn call(_ctx: *Context) !String {
-        try (try slotEventLog(_ctx)).append("name|");
-        return "World";
-    }
-}.call;
-
-const name = initCellFn(
+fn getName(ctx: *Context) !String {
+    try (try slotEventLog(ctx)).append("name|");
+    return "World";
+}
+pub const name = initCellFn(
     String,
     getName,
     null,
 );
 
-const getGreeting = struct {
-    fn call(_ctx: *Context) !OwnedString {
-        try (try slotEventLog(_ctx)).append("greeting|");
-
-        const greeting_string = std.fmt.allocPrint(
-            _ctx.allocator,
-            "{s} {s}!",
-            .{ (try hello(_ctx)).get(), (try name(_ctx)).get() },
-        ) catch unreachable;
-        return OwnedString.managed(greeting_string);
-    }
-}.call;
-const greeting = initSlotFn(
+fn getGreeting(ctx: *Context) !OwnedString {
+    try (try slotEventLog(ctx)).append("greeting|");
+    return OwnedString.managed(std.fmt.allocPrint(
+        ctx.allocator,
+        "{s} {s}!",
+        .{ (try hello(ctx)).get(), (try name(ctx)).get() },
+    ) catch unreachable);
+}
+pub const greeting = initSlotFn(
     OwnedString,
     getGreeting,
     deinitSlotValue(OwnedString, null),
 );
 
-const response = initCellFn(String, struct {
-    fn call(_ctx: *Context) !String {
-        try (try slotEventLog(_ctx)).append("response|");
-        return "How are you?";
-    }
-}.call, null);
+fn getResponse(_ctx: *Context) !String {
+    try (try slotEventLog(_ctx)).append("response|");
+    return "How are you?";
+}
+pub const response = initCellFn(
+    String,
+    getResponse,
+    null,
+);
 
-const getGreetingAndResponse = struct {
-    fn call(_ctx: *Context) !OwnedString {
-        try (try slotEventLog(_ctx)).append("greetingAndResponse|");
-        return OwnedString.managed(
-            std.fmt.allocPrint(
-                _ctx.allocator,
-                "{s} {s}",
-                .{ (try greeting(_ctx)).value, (try response(_ctx)).get() },
-            ) catch unreachable,
-        );
-    }
-}.call;
-const greetingAndResponse = initSlotFn(
+fn getGreetingAndResponse(_ctx: *Context) !OwnedString {
+    try (try slotEventLog(_ctx)).append("greetingAndResponse|");
+    return OwnedString.managed(
+        std.fmt.allocPrint(
+            _ctx.allocator,
+            "{s} {s}",
+            .{ (try greeting(_ctx)).value, (try response(_ctx)).get() },
+        ) catch unreachable,
+    );
+}
+pub const greetingAndResponse = initSlotFn(
     OwnedString,
     getGreetingAndResponse,
     deinitSlotValue(OwnedString, null),
