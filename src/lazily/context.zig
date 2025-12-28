@@ -189,7 +189,7 @@ pub const Slot = struct {
         ctx.mutex.lock();
         defer ctx.mutex.unlock();
         if (ctx.cache.get(cache_key)) |existing| {
-            self.destroyUnlocked(false);
+            self.destroySelf(false);
             return existing;
         }
 
@@ -280,15 +280,12 @@ pub const Slot = struct {
             unreachable;
         }
 
-        self.destroyInCacheUnlocked(recurse);
-
-        self.parents.deinit();
-        self.ctx.allocator.destroy(self);
+        self.destroySelf(recurse);
     }
 
     /// Destroys the value and its subscribers recursively.
     /// Internal version: assumes ctx.mutex is ALREADY held.
-    pub fn destroyInCacheUnlocked(self: *Slot, recurse: ?bool) void {
+    pub fn destroySelf(self: *Slot, recurse: ?bool) void {
         if (self.storage) |storage| {
             if (recurse == null or recurse == true) {
                 var parents_iter = self.parents.keyIterator();
@@ -319,6 +316,8 @@ pub const Slot = struct {
             self.storage = null;
         }
         self.change_subscribers.deinit();
+        self.parents.deinit();
+        self.ctx.allocator.destroy(self);
     }
 
     pub const Modes = enum { direct, indirect };
