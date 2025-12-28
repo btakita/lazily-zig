@@ -311,10 +311,14 @@ pub const Slot = struct {
                 if (self.free) |free_fn| {
                     free_fn(self.ctx.allocator, storage.payload.single_ptr);
                 }
+            } else if (self.ptr_size == .slice) {
+                // Direct slices also need to be freed if they were allocated in toStoredType
+                // However, toStoredType currently only allocates for .indirect.
+                // If toStoredType is updated to dupe slices, this would be needed.
             }
             self.storage = null;
-            self.change_subscribers.deinit();
         }
+        self.change_subscribers.deinit();
     }
 
     pub const Modes = enum { direct, indirect };
