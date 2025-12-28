@@ -211,6 +211,12 @@ pub const Slot = struct {
     }
 
     pub fn emitChange(self: *Slot) void {
+        self.ctx.mutex.lock();
+        defer self.ctx.mutex.unlock();
+        self.emitChangeUnlocked();
+    }
+
+    pub fn emitChangeUnlocked(self: *Slot) void {
         var iter = self.change_subscribers.keyIterator();
         while (iter.next()) |ptr| {
             const dependent_slot = ptr.*;

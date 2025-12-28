@@ -98,9 +98,12 @@ pub fn Cell(comptime T: type) type {
         }
 
         pub fn set(self: *@This(), new_value: T) void {
+            self.ctx.mutex.lock();
             self.value = new_value;
+            self.slot.emitChangeUnlocked();
 
-            self.slot.emitChange();
+            // Callbacks may call into the context so unlock here.
+            self.ctx.mutex.unlock();
 
             var iter = self.change_subscribers.iterator();
             while (iter.next()) |entry| {
@@ -111,6 +114,9 @@ pub fn Cell(comptime T: type) type {
         }
 
         pub fn subscribe(self: *@This(), cb: ChangeCallback(T)) !bool {
+            self.ctx.mutex.lock();
+            defer self.ctx.mutex.unlock();
+
             const subscriber_key = subscriberKey(self.ctx, cb);
 
             const gop = try self.change_subscribers.getOrPut(subscriber_key);
@@ -121,6 +127,9 @@ pub fn Cell(comptime T: type) type {
         }
 
         pub fn unsubscribe(self: *@This(), cb: ChangeCallback(T)) bool {
+            self.ctx.mutex.lock();
+            defer self.ctx.mutex.unlock();
+
             // Remove by swap-remove for O(1) erase (order not preserved).
             const subscriber_key = subscriberKey(self.ctx, cb);
             return self.change_subscribers.remove(subscriber_key);
@@ -209,10 +218,10 @@ test "cell: returns Cell(T) with initial value and caches computation" {
 
     const c1 = try cell(i32, ctx, State.getNumber, null);
     try std.testing.expectEqual(@as(i32, 123), c1.get());
+    try std.testing.expectEqual(@as(usize, 1), State.calls.load(.seq_cst));
 
     const c2 = try cell(i32, ctx, State.getNumber, null);
     try std.testing.expectEqual(@as(i32, 123), c2.get());
-
     // The slot should compute the value once per Context for the same getter.
     try std.testing.expectEqual(@as(usize, 1), State.calls.load(.seq_cst));
 }
@@ -333,14 +342,12 @@ test "cellFn: get/set + invalidate cache" {
     );
 
     try expectEventLog(ctx, "greeting|hello|name|greetingAndResponse|response|");
-    try struct {
-        fn call(_ctx: *Context) !void {
-            var name_cell = try name(_ctx);
-            name_cell.set("You");
-            try std.testing.expectEqualStrings("You", name_cell.get());
-            try std.testing.expectEqualStrings("You", (try name(_ctx)).get());
-        }
-    }.call(ctx);
+    {
+        var name_cell = try name(ctx);
+        name_cell.set("You");
+        try std.testing.expectEqualStrings("You", name_cell.get());
+        try std.testing.expectEqualStrings("You", (try name(ctx)).get());
+    }
     try std.testing.expect(ctx.getSlot(getName) != null);
     try std.testing.expectEqual(null, ctx.getSlot(getGreeting));
     try std.testing.expectEqual(null, ctx.getSlot(getGreetingAndResponse));
