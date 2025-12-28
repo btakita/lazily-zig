@@ -1,113 +1,21 @@
 const std = @import("std");
 
-pub fn SlotStrategy(comptime T: type) enum { direct, indirect } {
-    const type_info = @typeInfo(T);
-    const is_pointer = type_info == .pointer;
-    // Storage strategy: .direct for pointers/slices, .indirect others
-    return if (is_pointer) .direct else .indirect;
-}
-
-pub fn isSlice(comptime T: type) bool {
-    const type_info = @typeInfo(T);
-    if (type_info != .pointer) return false;
-    return type_info.pointer.size == .Slice;
-}
-
-pub fn isPointer(comptime T: type) bool {
-    const type_info = @typeInfo(T);
-    if (type_info != .pointer) return false;
-    return type_info.pointer.size == .One;
-}
-
-// Type-erased slice handler that works with any element type
-pub const SliceValue = struct {
-    ptr: *anyopaque,
-    len: usize, // Number of elements (not bytes)
-    element_size: usize, // @sizeOf(T)
-    free: *const fn (std.mem.Allocator, *anyopaque, usize, usize) void,
-};
-
-// Create a SliceHandler for any slice type
-pub fn sliceValue(comptime T: type, slice_data: T) SliceValue {
-    const type_info = @typeInfo(T);
-    if (type_info != .pointer) {
-        @compileError("sliceValue requires a pointer/slice type");
-    }
-    const element_type = type_info.pointer.child;
-
-    return .{
-        .ptr = @ptrCast(@constCast(slice_data.ptr)),
-        .len = slice_data.len,
-        .element_size = @sizeOf(element_type),
-        .free = struct {
-            fn free(allocator: std.mem.Allocator, ptr: *anyopaque, len: usize, element_size: usize) void {
-                _ = element_size; // For debugging/validation
-                const slice: T = @as([*]element_type, @ptrCast(@alignCast(ptr)))[0..len];
-                allocator.free(slice);
-            }
-        }.free,
-    };
-}
-
-pub const DeinitValue = union(enum) {
-    single_ptr: *anyopaque,
-    slice: SliceValue,
-};
-
-pub const DeinitFn = *const fn (*Context, DeinitValue) void;
-
-pub const ContextSlotPtr = union(enum) {
-    single_ptr: *anyopaque,
-    slice: SliceValue,
-};
-
-pub const ContextSlot = struct {
-    ctx: *Context,
-    ptr: ?ContextSlotPtr,
-    is_indirect: bool,
-    pointer_size: std.builtin.Type.Pointer.Size,
-    deinit: ?DeinitFn,
-    free: ?*const fn (std.mem.Allocator, *anyopaque) void = null,
-
-    pub fn destroy(self: *ContextSlot) void {
-        self.destroyInCache();
-        self.ctx.cache.remove(@intFromPtr(self));
-    }
-
-    pub fn destroyInCache(self: *ContextSlot) void {
-        if (self.deinit) |deinit| {
-            if (self.ptr) |ptr| {
-                const value = switch (ptr) {
-                    .single_ptr => |p| DeinitValue{ .single_ptr = p },
-                    .slice => |s| DeinitValue{ .slice = s },
-                };
-                deinit(self.ctx, value);
-            }
-        }
-        if (self.free) |free| {
-            if (self.ptr) |ptr| {
-                const _ptr = switch (ptr) {
-                    .single_ptr => |p| p,
-                    .slice => |s| s.ptr,
-                };
-                free(self.ctx.allocator, _ptr);
-            }
-        }
-    }
-};
-
-// Context with lazy cache
+/// Context with lazy cache
 pub const Context = struct {
     allocator: std.mem.Allocator,
     // Function pointer -> cached result
-    cache: std.AutoHashMap(usize, ContextSlot),
+    cache: std.AutoHashMap(usize, *Slot),
     // mutex: std.Thread.Mutex,
 
     pub fn init(allocator: std.mem.Allocator) !*Context {
         const ctx = try allocator.create(Context);
         ctx.* = .{
             .allocator = allocator,
-            .cache = std.AutoHashMap(usize, ContextSlot).init(allocator),
+            // Not thread-safe
+            .cache = std.AutoHashMap(
+                usize,
+                *Slot,
+            ).init(allocator),
             // .mutex = .{},
         };
         return ctx;
@@ -117,26 +25,398 @@ pub const Context = struct {
         // self.mutex.lock();
         // defer self.mutex.unlock();
 
-        // Clean up all cached values
-        var iter = self.cache.iterator();
-        while (iter.next()) |entry| {
-            const context_slot = entry.value_ptr;
-            context_slot.destroyInCache();
+        var iter = self.cache.valueIterator();
+        while (iter.next()) |ptr| {
+            const context_slot = ptr.*;
+            context_slot.destroy(false);
         }
         self.cache.deinit();
         self.allocator.destroy(self);
     }
 
-    // Get a ContextSlot. ContextSlot.destroy() will deinit and remove the ContextSlot from the Context.cache.
-    pub fn getContextSlot(self: *Context, fnc: *const anyopaque) ?ContextSlot {
-        return self.cache.get(@intFromPtr(fnc));
+    /// Get a Slot. Slot.destroy() will deinit and remove the Slot from the Context.cache.
+    pub fn getSlot(self: *Context, fnc: anytype) ?*Slot {
+        const key = valueFnCacheKey(fnc);
+        return self.cache.get(key);
     }
 };
+
+pub fn Owned(comptime T: type) type {
+    return struct {
+        value: T,
+        is_managed: bool,
+
+        pub fn managed(value: T) @This() {
+            return .{ .value = value, .is_managed = true };
+        }
+
+        pub fn literal(value: T) @This() {
+            return .{ .value = value, .is_managed = false };
+        }
+
+        pub fn deinit(self: *@This(), ctx: *Context) void {
+            if (!self.is_managed) return;
+
+            const type_info = @typeInfo(T);
+            if (type_info == .pointer) {
+                ctx.allocator.free(self.value);
+            } else if (type_info == .@"struct" and @hasDecl(T, "deinit")) {
+                self.value.deinit(ctx);
+            }
+        }
+    };
+}
+
+pub const String = []const u8;
+pub const OwnedString = Owned(String);
+
+pub fn valueFnCacheKey(valueFn: anytype) usize {
+    const type_info = @typeInfo(@TypeOf(valueFn));
+
+    return switch (type_info) {
+        // If caller passes a function (not a pointer), take its address.
+        .@"fn" => @intFromPtr(&valueFn),
+
+        // If caller passes a function pointer, use it directly.
+        .pointer => |p| blk: {
+            if (@typeInfo(p.child) != .@"fn") {
+                @compileError("Expected a function pointer");
+            }
+            break :blk @intFromPtr(valueFn);
+        },
+
+        else => @compileError("expected a function or function pointer"),
+    };
+}
+
+pub const Slot = struct {
+    ctx: *Context,
+    value_fn_ptr: ?*anyopaque,
+    cache_key: ?usize = null,
+    storage: ?Storage,
+    mode: Modes,
+    /// Pointer classification for the cached value type (std.builtin.Type.Pointer.Size): .one, .many, .slice, .c
+    ptr_size: std.builtin.Type.Pointer.Size,
+    change_subscribers: std.AutoHashMap(*Slot, void),
+    parents: std.AutoHashMap(*Slot, void),
+    deinit: ?*const fn (*Slot) void,
+    free: ?*const fn (std.mem.Allocator, *anyopaque) void = null,
+
+    pub fn init(
+        comptime T: type,
+        ctx: *Context,
+        valueFn: *const ValueFn(T),
+        deinitPayload: ?DeinitPayloadFn,
+    ) !*@This() {
+        const mode = comptime Mode(T);
+        const ptr_size = comptime Slot.PtrSize(T);
+        const free = comptime Free(T);
+        const self = try ctx.allocator.create(Slot);
+        self.* = Slot{
+            .ctx = ctx,
+            .value_fn_ptr = null,
+            .mode = mode,
+            .storage = null,
+            .ptr_size = ptr_size,
+            .change_subscribers = std.AutoHashMap(
+                *Slot,
+                void,
+            ).init(ctx.allocator),
+            .parents = std.AutoHashMap(
+                *Slot,
+                void,
+            ).init(ctx.allocator),
+            .deinit = deinitPayload,
+            .free = if (mode == .indirect) free else null,
+        };
+
+        const current_slot: ?*Slot = currentSlotFor(ctx);
+        if (current_slot) |child_slot| {
+            try self.subscribeChange(child_slot);
+            // try child_slot.subscribeChange(self);
+        }
+
+        var frame = TrackingFrame{
+            .prev = null,
+            .ctx = ctx,
+            .slot = self,
+        };
+        pushTracking(&frame);
+        defer popTracking(&frame);
+
+        const value = try valueFn(ctx);
+        const stored_value = try Storage.toStoredType(T, ctx, value);
+        self.value_fn_ptr = @ptrCast(@constCast(valueFn));
+
+        self.storage = Storage.init(
+            switch (comptime Mode(T)) {
+                .direct => switch (comptime Slot.PtrSize(T)) {
+                    .slice => Slot.Storage.Payload{
+                        .slice = SliceStorage.init(T, stored_value),
+                    },
+                    .one, .many, .c => Slot.Storage.Payload{
+                        .single_ptr = @ptrCast(@constCast(stored_value)),
+                    },
+                },
+                .indirect => Slot.Storage.Payload{
+                    .single_ptr = @ptrCast(stored_value),
+                },
+            },
+        );
+        return self;
+    }
+
+    pub const GetError = error{SlotMissingPtr};
+
+    pub fn get(self: Slot, comptime T: type) GetError!Result(T) {
+        const payload = if (self.storage) |storage| blk: {
+            break :blk storage.payload;
+        } else {
+            return error.SlotMissingPtr;
+        };
+
+        return switch (comptime Mode(T)) {
+            .direct => switch (comptime Slot.PtrSize(T)) {
+                .slice => blk: {
+                    const slice_storage = payload.slice;
+                    break :blk slice_storage.toSlice(T);
+                },
+                .one, .many, .c => @as(T, @ptrCast(@alignCast(payload.single_ptr))),
+            },
+            .indirect => @as(*T, @ptrCast(@alignCast(payload.single_ptr))),
+        };
+    }
+
+    pub const GetPtrError = error{ CannotGetPtrOfDirectMode, SlotMissingPtr };
+
+    pub fn getPtr(self: Slot, comptime T: type) GetPtrError!*T {
+        const payload = if (self.storage) |storage| storage.payload else return error.SlotMissingPtr;
+        return switch (comptime Mode(T)) {
+            .direct => return error.CannotGetPtrOfDirectMode,
+            .indirect => @as(*T, @ptrCast(@alignCast(payload.single_ptr))),
+        };
+    }
+
+    pub fn subscribeChange(self: *Slot, child: *Slot) !void {
+        _ = try self.change_subscribers.getOrPut(child);
+        _ = try child.parents.getOrPut(self);
+    }
+
+    pub fn unsubscribeChange(self: *Slot, child: *Slot) void {
+        _ = self.change_subscribers.remove(child);
+        _ = child.parents.remove(self);
+    }
+
+    pub fn emitChange(self: *Slot) void {
+        var iter = self.change_subscribers.keyIterator();
+        while (iter.next()) |ptr| {
+            const dependent_slot = ptr.*;
+            dependent_slot.destroy(true);
+        }
+        // Clear the subscribers since they've been destroyed
+        self.change_subscribers.clearRetainingCapacity();
+    }
+
+    pub fn destroy(self: *Slot, recurse: ?bool) void {
+        // Remove from cache if not already cleared by Context.deinit
+        if (self.cache_key) |key| {
+            _ = self.ctx.cache.remove(key);
+        } else if (self.value_fn_ptr != null) {
+            _ = self.ctx.cache.remove(@intFromPtr(self.value_fn_ptr));
+        }
+
+        self.destroyInCache(recurse);
+
+        self.parents.deinit();
+        self.ctx.allocator.destroy(self);
+    }
+
+    /// Destroys the value and its subscribers recursively.
+    /// Used for cache invalidation.
+    pub fn destroyInCache(self: *Slot, recurse: ?bool) void {
+        if (self.storage) |storage| {
+            if (recurse == null or recurse == true) {
+                var parents_iter = self.parents.keyIterator();
+                while (parents_iter.next()) |ptr| {
+                    const parent_slot = ptr.*;
+                    parent_slot.unsubscribeChange(self);
+                }
+
+                var subscribers_iter = self.change_subscribers.keyIterator();
+                while (subscribers_iter.next()) |ptr| {
+                    const dependent_slot = ptr.*;
+                    dependent_slot.destroy(true);
+                }
+            }
+
+            if (self.deinit) |deinit_fn| {
+                deinit_fn(self);
+            }
+            if (self.mode == .indirect) {
+                if (self.free) |free_fn| {
+                    free_fn(self.ctx.allocator, storage.payload.single_ptr);
+                }
+            }
+            self.storage = null;
+            self.change_subscribers.deinit();
+        }
+    }
+
+    pub const Modes = enum { direct, indirect };
+    pub fn Mode(comptime T: type) Modes {
+        const type_info = @typeInfo(T);
+        const is_pointer = type_info == .pointer;
+        // Storage strategy: .direct for pointers/slices, .indirect others
+        return if (is_pointer) .direct else .indirect;
+    }
+
+    pub fn Result(comptime T: type) type {
+        return switch (comptime Mode(T)) {
+            .direct => T,
+            .indirect => *T,
+        };
+    }
+
+    pub fn PtrSize(comptime T: type) std.builtin.Type.Pointer.Size {
+        return @typeInfo(Slot.Result(T)).pointer.size;
+    }
+
+    pub fn StorageKind(comptime T: type) enum { single_ptr, slice } {
+        return switch (comptime Mode(T)) {
+            .direct => switch (comptime PtrSize(T)) {
+                .slice => .slice,
+                .one, .many, .c => .single_ptr,
+            },
+            .indirect => .single_ptr,
+        };
+    }
+
+    pub const Storage = struct {
+        pub const Payload = union(enum) {
+            single_ptr: *anyopaque,
+            slice: SliceStorage,
+        };
+
+        payload: Payload,
+        pub fn init(payload: Payload) Storage {
+            return .{ .payload = payload };
+        }
+
+        /// Converts a computed value `T` into the storage representation `StoredType(T)`.
+        /// - `.direct`: no allocation, returns the value as-is
+        /// - `.indirect`: allocates `T` in `ctx.allocator` and returns `*T`
+        pub fn toStoredType(comptime T: type, ctx: *Context, value: T) !Result(T) {
+            return switch (comptime Mode(T)) {
+                .direct => value,
+                .indirect => blk: {
+                    const p = try ctx.allocator.create(T);
+                    p.* = value;
+                    break :blk p;
+                },
+            };
+        }
+    };
+
+    /// Type-erased slice handler that works with any element type
+    /// TODO: Is this needed with the addition of Owned?
+    pub const SliceStorage = struct {
+        ptr: *anyopaque,
+        len: usize, // Number of elements (not bytes)
+        mode: Slot.Modes,
+        element_size: usize, // @sizeOf(T)
+        free: *const fn (std.mem.Allocator, *anyopaque, usize, usize) void,
+
+        /// Create a `SliceStorage` for any slice type
+        pub fn init(comptime T: type, value: T) SliceStorage {
+            const type_info = @typeInfo(T);
+            if (type_info != .pointer) {
+                @compileError("SliceStorage.init requires a pointer/slice type");
+            }
+            const element_type = type_info.pointer.child;
+
+            return .{
+                .ptr = @ptrCast(@constCast(value.ptr)),
+                .len = value.len,
+                .mode = Mode(element_type),
+                .element_size = @sizeOf(element_type),
+                .free = struct {
+                    fn free(
+                        allocator: std.mem.Allocator,
+                        ptr: *anyopaque,
+                        len: usize,
+                        element_size: usize,
+                    ) void {
+                        _ = element_size; // For debugging/validation
+                        const slice: T = @as([*]element_type, @ptrCast(@alignCast(ptr)))[0..len];
+                        allocator.free(slice);
+                    }
+                }.free,
+            };
+        }
+
+        /// Reconstruct the original slice type `T` from this storage.
+        /// `T` must be a slice type (pointer size `.slice`), e.g. `[]u8`, `[]const u8`, `[]MyType`.
+        pub fn toSlice(self: SliceStorage, comptime T: type) T {
+            const type_info = @typeInfo(T);
+            if (type_info != .pointer or type_info.pointer.size != .slice) {
+                const message = std.fmt.comptimePrint(
+                    "SliceStorage.unpack requires a slice type (e.g. []u8, []const u8). Got {}",
+                    .{T},
+                );
+                @compileError(message);
+            }
+
+            const element_type = type_info.pointer.child;
+
+            // Best-effort validation: helps catch mismatched T at runtime in Debug/ReleaseSafe.
+            std.debug.assert(self.element_size == @sizeOf(element_type));
+
+            return @as([*]element_type, @ptrCast(@alignCast(self.ptr)))[0..self.len];
+        }
+    };
+
+    /// Create a free function that knows the type `T`
+    pub fn Free(comptime T: type) ?*const fn (std.mem.Allocator, *anyopaque) void {
+        return switch (comptime Slot.Mode(T)) {
+            .direct => null,
+            .indirect => struct {
+                fn free(allocator: std.mem.Allocator, ptr: *anyopaque) void {
+                    allocator.destroy(@as(*T, @ptrCast(@alignCast(ptr))));
+                }
+            }.free,
+        };
+    }
+
+    pub fn DeinitValueFn(comptime T: type) type {
+        return *const fn (*Context, *const ValueFn(T), T) void;
+    }
+    pub const DeinitPayloadFn = *const fn (*Slot) void;
+};
+
+pub fn ValueFn(comptime T: type) type {
+    return fn (*Context) anyerror!T;
+}
+
+pub const SubscriberKey = struct {
+    ctx_ptr: usize, // @intFromPtr(ctx) or 0 if null
+    cb_ptr: usize, // @intFromPtr(callback)
+};
+
+pub fn subscriberKey(ctx: *Context, valueFn: anytype) SubscriberKey {
+    return .{
+        .ctx_ptr = @intFromPtr(ctx),
+        .cb_ptr = @intFromPtr(valueFn),
+    };
+}
+
+pub const SubscriberSet = std.AutoHashMap(SubscriberKey, void);
+
+const SlotCallback = *const fn (ctx: *Context, slot: *Slot) void;
 
 pub const TrackingFrame = struct {
     prev: ?*TrackingFrame,
     ctx: *Context,
-    slot: *ContextSlot,
+    slot: *Slot,
 };
 
 threadlocal var tracking_top: ?*TrackingFrame = null;
@@ -151,7 +431,8 @@ pub fn popTracking(frame: *TrackingFrame) void {
     tracking_top = frame.prev;
 }
 
-pub fn currentSlotFor(ctx: *Context) ?*ContextSlot {
+// TODO: Use an AutoHashMap for faster lookup
+pub fn currentSlotFor(ctx: *Context) ?*Slot {
     var it = tracking_top;
     while (it) |f| : (it = f.prev) {
         if (f.ctx == ctx) return f.slot;

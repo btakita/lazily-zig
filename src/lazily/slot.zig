@@ -1,267 +1,131 @@
 const std = @import("std");
 const ctx_mod = @import("./context.zig");
 const Context = ctx_mod.Context;
-const DeinitFn = ctx_mod.DeinitFn;
-const ContextSlot = ctx_mod.ContextSlot;
-const ContextSlotPtr = ctx_mod.ContextSlotPtr;
-const DeinitValue = ctx_mod.DeinitValue;
-const isSlice = ctx_mod.isSlice;
+const currentSlotFor = ctx_mod.currentSlotFor;
 const popTracking = ctx_mod.popTracking;
 const pushTracking = ctx_mod.pushTracking;
-const sliceValue = ctx_mod.sliceValue;
-const SlotStrategy = ctx_mod.SlotStrategy;
+const Slot = ctx_mod.Slot;
+const String = ctx_mod.String;
 const TrackingFrame = ctx_mod.TrackingFrame;
+const ValueFn = ctx_mod.ValueFn;
+const valueFnCacheKey = ctx_mod.valueFnCacheKey;
+const DeinitPayloadFn = Slot.DeinitPayloadFn;
+const DeinitValueFn = Slot.DeinitValueFn;
+const Free = Slot.Free;
+const Mode = Slot.Mode;
+const Storage = Slot.Storage;
+const StorageKind = Slot.StorageKind;
+const StoredType = Slot.Result;
+const test_mod = @import("test.zig");
+const slotEventLog = test_mod.slotEventLog;
+const expectEventLog = test_mod.expectEventLog;
 
-const SlotError = error{ContextSlotMissingPtr};
-
-pub fn SlotFn(comptime T: type) type {
-    return fn (*Context) anyerror!T;
-}
-
-pub fn slotFn(comptime T: type, comptime getValue: *const SlotFn(T), comptime deinit: ?DeinitFn) *const SlotFn(T) {
+pub fn initSlotFn(
+    comptime T: type,
+    comptime valueFn: *const ValueFn(T),
+    comptime deinit: ?DeinitPayloadFn,
+) *const fn (*Context) anyerror!Slot.Result(T) {
     return struct {
-        fn call(ctx: *Context) anyerror!T {
-            return slot(T, ctx, getValue, deinit);
+        fn call(ctx: *Context) !Slot.Result(T) {
+            return try slot(T, ctx, valueFn, deinit);
         }
     }.call;
 }
 
-// Accepts a separate value getter function and optional deinit function.
-// See slotWithDeinit or slotFn for alternative apis.
+/// Accepts a separate value getter function and optional `deinit` function.
+/// See `slotFn` for alternative api.
 pub fn slot(
     comptime T: type,
     ctx: *Context,
-    getValue: *const SlotFn(T),
-    deinit: ?DeinitFn,
-) !T {
-    const key = @intFromPtr(getValue);
+    valueFn: *const ValueFn(T),
+    deinit: ?DeinitPayloadFn,
+) !Slot.Result(T) {
+    return slotKeyed(T, ctx, valueFnCacheKey(valueFn), valueFn, deinit);
+}
 
+pub fn slotKeyed(
+    comptime T: type,
+    ctx: *Context,
+    key: usize,
+    valueFn: *const ValueFn(T),
+    deinit: ?DeinitPayloadFn,
+) !Slot.Result(T) {
     // ctx.mutex.lock();
     // defer ctx.mutex.unlock();
 
     // Check cache
-    if (ctx.cache.get(key)) |context_slot| {
-        return fromContextSlot(T, &context_slot);
+    if (ctx.cache.get(key)) |cached_slot| {
+        if (cached_slot.storage != null) {
+            const current_slot: ?*Slot = currentSlotFor(ctx);
+            if (current_slot) |child_slot| {
+                try cached_slot.subscribeChange(child_slot);
+                // try child_slot.subscribeChange(cached_slot);
+            }
+            return cached_slot.get(T);
+        }
     }
 
     // Create a free function that knows the type T
-    const context_slot_value = try computeContextSlotValue(
+    var new_slot = try Slot.init(
         T,
         ctx,
-        getValue,
+        valueFn,
         deinit,
     );
-    try ctx.cache.put(key, context_slot_value.context_slot);
+    try ctx.cache.put(key, new_slot);
 
-    return context_slot_value.value;
+    return new_slot.get(T);
 }
 
-fn ContextSlotValue(comptime T: type) type {
-    return struct { context_slot: ContextSlot, value: T };
-}
+const SlotError = error{MissingStorage};
 
-pub fn computeContextSlotValue(
+pub fn deinitSlotValue(
     comptime T: type,
-    ctx: *Context,
-    getValue: *const SlotFn(T),
-    deinit: ?DeinitFn,
-) !ContextSlotValue(T) {
-    var context_slot = initContextSlot(T, ctx, deinit);
-    var frame = TrackingFrame{
-        .prev = null,
-        .ctx = ctx,
-        .slot = &context_slot,
-    };
-    pushTracking(&frame);
-    defer popTracking(&frame);
-
-    const value = try getValue(ctx);
-    context_slot.ptr = switch (comptime SlotStrategy(T)) {
-        .direct => switch (comptime PointerSize(T)) {
-            .slice => .{ .slice = sliceValue(T, value) },
-            .one, .many, .c => .{ .single_ptr = @ptrCast(@constCast(value)) },
-        },
-        .indirect => blk: {
-            const stored = try ctx.allocator.create(T);
-            stored.* = value;
-            break :blk .{ .single_ptr = @ptrCast(stored) };
-        },
-    };
-    return .{
-        .context_slot = context_slot,
-        .value = value,
-    };
-}
-
-fn initContextSlot(comptime T: type, ctx: *Context, deinit: ?DeinitFn) ContextSlot {
-    const strategy = comptime SlotStrategy(T);
-    const pointer_size = comptime PointerSize(T);
-    const free = comptime Free(T);
-    return ContextSlot{
-        .ctx = ctx,
-        .ptr = null,
-        .is_indirect = strategy == .indirect,
-        .pointer_size = pointer_size,
-        .deinit = deinit,
-        .free = if (strategy == .indirect) free else null,
-    };
-}
-
-// Accepts a getter function for a lazily.WithDeinit struct that holds the value and optional deinit functions.
-// See slot or slotFn for alternative apis.
-pub fn slotWithDeinit(
-    comptime T: type,
-    ctx: *Context,
-    withDeinitFn: WithDeinitFn(T),
-) !T {
-    const key = @intFromPtr(withDeinitFn);
-
-    // ctx.mutex.lock();
-    // defer ctx.mutex.unlock();
-
-    // Check cache
-    if (ctx.cache.get(key)) |context_slot| {
-        return fromContextSlot(T, &context_slot);
+    comptime deinitValueFn: ?DeinitValueFn(T),
+) DeinitPayloadFn {
+    // If they try to use the default "free" on a raw pointer/slice, error out.
+    if (deinitValueFn == null and (comptime Mode(T) == .direct)) {
+        const message = std.fmt.comptimePrint(
+            "To prevent accidental freeing of string literals or unowned memory, " ++
+                "deinitValue cannot be used directly with raw slices/pointers. " ++
+                "Please return an Owned(T) or provide a custom deinit function. " ++
+                "Got {}",
+            .{T},
+        );
+        @compileError(message);
     }
-
-    // Compute value
-    const with_deinit = try withDeinitFn(ctx);
-
-    // Create a free function that knows the type T
-    const value = with_deinit.value;
-    const deinit = switch (comptime SlotStrategy(T)) {
-        .direct => @as(?DeinitFn, @ptrCast(with_deinit.deinit)),
-        .indirect => deinitIndirect(T, with_deinit.deinit),
-    };
-    const context_slot = try toContextSlot(T, ctx, value, deinit);
-    try ctx.cache.put(key, context_slot);
-
-    return value;
-}
-
-pub fn WithDeinitFn(comptime T: type) type {
-    return *const fn (*Context) anyerror!WithDeinit(T);
-}
-
-pub fn WithDeinit(comptime T: type) type {
-    return struct {
-        value: T,
-        deinit: ?DeinitFn,
-    };
-}
-
-fn fromContextSlot(comptime T: type, context_slot: *const ContextSlot) SlotError!T {
-    const ptr = context_slot.ptr orelse return error.ContextSlotMissingPtr;
-
-    return switch (comptime SlotStrategy(T)) {
-        .direct => switch (context_slot.pointer_size) {
-            .slice => blk: {
-                const slice_value = ptr.slice;
-                const slice: T = @as(
-                    [*]std.meta.Elem(T),
-                    @ptrCast(@alignCast(slice_value.ptr)),
-                )[0..slice_value.len];
-                break :blk slice;
-            },
-            .one, .many, .c => @as(T, @ptrCast(@alignCast(ptr.single_ptr))),
-        },
-        .indirect => @as(*T, @ptrCast(@alignCast(ptr.single_ptr))).*,
-    };
-}
-
-fn toContextSlot(comptime T: type, ctx: *Context, value: T, deinit: ?DeinitFn) !ContextSlot {
-    const strategy = comptime SlotStrategy(T);
-    const pointer_size = comptime PointerSize(T);
-    const free = comptime Free(T);
-    return ContextSlot{
-        .ctx = ctx,
-        .ptr = switch (strategy) {
-            .direct => switch (pointer_size) {
-                .slice => .{ .slice = sliceValue(T, value) },
-                .one, .many, .c => .{ .single_ptr = @ptrCast(@constCast(value)) },
-            },
-            .indirect => blk: {
-                const stored = try ctx.allocator.create(T);
-                stored.* = value;
-                break :blk .{ .single_ptr = @ptrCast(stored) };
-            },
-        },
-        .is_indirect = strategy == .indirect,
-        .pointer_size = pointer_size,
-        .deinit = deinit,
-        .free = if (strategy == .indirect) free else null,
-    };
-}
-
-// Create a free function that knows the type T
-fn Free(comptime T: type) ?*const fn (std.mem.Allocator, *anyopaque) void {
-    return switch (comptime SlotStrategy(T)) {
-        .direct => null,
-        .indirect => struct {
-            fn free(allocator: std.mem.Allocator, ptr: *anyopaque) void {
-                allocator.destroy(@as(*T, @ptrCast(@alignCast(ptr))));
-            }
-        }.free,
-    };
-}
-
-fn PointerSize(comptime T: type) std.builtin.Type.Pointer.Size {
-    return @typeInfo(ContextSlotPtrType(T)).pointer.size;
-}
-
-fn ContextSlotPtrType(comptime T: type) type {
-    return switch (comptime SlotStrategy(T)) {
-        .direct => T,
-        .indirect => *T,
-    };
-}
-
-fn deinitIndirect(comptime T: type, comptime deinitFromUser: ?DeinitFn) DeinitFn {
-    return struct {
-        pub fn deinit(ctx: *Context, val: DeinitValue) void {
-            if (deinitFromUser) {
-                deinitFromUser(ctx, val);
-            }
-
-            switch (comptime SlotStrategy(T)) {
+    const effective_deinitValueFn = deinitValueFn orelse struct {
+        fn call(_ctx: *Context, valueFn: *const ValueFn(T), value: T) void {
+            _ = valueFn;
+            switch (comptime Mode(T)) {
                 .direct => unreachable,
                 .indirect => {
-                    ctx.allocator.destroy(
-                        @as(
-                            *T,
-                            @ptrCast(@alignCast(val.single_ptr)),
-                        ),
-                    );
+                    // T is not a pointer, check for deinit method
+                    if (comptime @typeInfo(T) == .@"struct" and
+                        @hasDecl(T, "deinit"))
+                    {
+                        // For indirect, val should be single_ptr pointing to T
+                        var mutable_value = value;
+                        mutable_value.deinit(_ctx);
+                    }
                 },
             }
         }
-    }.deinit;
-}
-
-pub fn deinitValue(comptime T: type) DeinitFn {
+    }.call;
     return struct {
-        pub fn deinit(ctx: *Context, val: DeinitValue) void {
-            switch (comptime SlotStrategy(T)) {
-                .direct => {
-                    // T is a pointer/slice type
-                    switch (val) {
-                        .single_ptr => |p| {
-                            const ptr_val = @as(T, @ptrCast(@alignCast(p)));
-                            ctx.allocator.free(ptr_val);
-                        },
-                        .slice => |sv| {
-                            sv.free(ctx.allocator, sv.ptr, sv.len, sv.element_size);
-                        },
-                    }
-                },
-                .indirect => {
-                    // T is not a pointer, check for deinit method
-                    if (comptime @typeInfo(T) == .@"struct" and @hasDecl(T, "deinit")) {
-                        // For indirect, val should be single_ptr pointing to T
-                        const t_ptr = @as(*T, @ptrCast(@alignCast(val.single_ptr)));
-                        t_ptr.deinit();
-                    }
-                },
+        pub fn deinit(_slot: *Slot) void {
+            if (_slot.storage) |storage| {
+                const actual_value: T = switch (comptime Mode(T)) {
+                    .direct => switch (comptime Slot.PtrSize(T)) {
+                        .slice => storage.payload.slice.toSlice(T),
+                        .one, .many, .c => @as(T, @ptrCast(@alignCast(storage.payload.single_ptr))),
+                    },
+                    .indirect => @as(*T, @ptrCast(@alignCast(storage.payload.single_ptr))).*,
+                };
+                if (_slot.value_fn_ptr) |value_fn_ptr| {
+                    const typed_value_fn_ptr: *ValueFn(T) = @ptrCast(@alignCast(value_fn_ptr));
+                    effective_deinitValueFn(_slot.ctx, typed_value_fn_ptr, actual_value);
+                }
             }
         }
     }.deinit;
@@ -283,7 +147,33 @@ pub const StringView = extern struct {
     }
 };
 
-test "Context.init, slotFn, Context.getContextSlot, Context.deinit" {
+fn SlotAndValue(comptime T: type) type {
+    return struct { slot: Slot, value: T };
+}
+
+fn deinitIndirect(comptime T: type, comptime deinitFromUser: ?DeinitPayloadFn) DeinitPayloadFn {
+    return struct {
+        pub fn deinit(ctx: *Context, val: Storage) void {
+            if (deinitFromUser) {
+                deinitFromUser(ctx, val);
+            }
+
+            switch (comptime Mode(T)) {
+                .direct => unreachable,
+                .indirect => {
+                    ctx.allocator.destroy(
+                        @as(
+                            *T,
+                            @ptrCast(@alignCast(val.single_ptr)),
+                        ),
+                    );
+                },
+            }
+        }
+    }.deinit;
+}
+
+test "Context.init, slotFn, Context.getSlot, Context.deinit" {
     const ctx = try Context.init(std.testing.allocator);
     defer ctx.deinit();
     const getFoo = struct {
@@ -291,9 +181,78 @@ test "Context.init, slotFn, Context.getContextSlot, Context.deinit" {
             return 1;
         }
     }.call;
-    const lazyFoo = slotFn(u8, getFoo, null);
+    const lazyFoo = initSlotFn(u8, getFoo, null);
 
-    try std.testing.expectEqual(null, ctx.getContextSlot(getFoo));
-    try std.testing.expectEqual(1, lazyFoo(ctx));
-    try std.testing.expect(ctx.getContextSlot(getFoo) != null);
+    try std.testing.expectEqual(null, ctx.getSlot(getFoo));
+    try std.testing.expectEqual(@as(u8, 1), (try lazyFoo(ctx)).*);
+    try std.testing.expect(ctx.getSlot(getFoo) != null);
+}
+
+test "Slot.emitChange" {
+    const ctx = try Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const getFoo = struct {
+        fn call(_ctx: *Context) !u8 {
+            try (try slotEventLog(_ctx)).append("foo|");
+            return 1;
+        }
+    }.call;
+    const foo = comptime initSlotFn(
+        u8,
+        getFoo,
+        null,
+    );
+
+    const getBar = struct {
+        fn call(_ctx: *Context) !u8 {
+            try (try slotEventLog(_ctx)).append("bar|");
+            return (try foo(_ctx)).* * 10;
+        }
+    }.call;
+    const bar = comptime initSlotFn(
+        u8,
+        getBar,
+        null,
+    );
+
+    const getBaz = struct {
+        fn call(_ctx: *Context) !u8 {
+            try (try slotEventLog(_ctx)).append("baz|");
+            return (try bar(_ctx)).* + 1;
+        }
+    }.call;
+    const baz = comptime initSlotFn(
+        u8,
+        getBaz,
+        null,
+    );
+
+    try std.testing.expectEqual(null, ctx.getSlot(getFoo));
+    try std.testing.expectEqual(null, ctx.getSlot(getBar));
+    try std.testing.expectEqual(null, ctx.getSlot(getBaz));
+    try expectEventLog(ctx, "");
+
+    try std.testing.expectEqual(11, (try baz(ctx)).*);
+    try std.testing.expect(ctx.getSlot(getFoo) != null);
+    try std.testing.expect(ctx.getSlot(getBar) != null);
+    try std.testing.expect(ctx.getSlot(getBaz) != null);
+    try expectEventLog(ctx, "baz|bar|foo|");
+
+    if (ctx.getSlot(getFoo)) |foo_slot| {
+        foo_slot.emitChange();
+    } else {
+        return error.FooNotFound;
+    }
+
+    try std.testing.expect(ctx.getSlot(getFoo) != null);
+    try std.testing.expectEqual(null, ctx.getSlot(getBar));
+    try std.testing.expectEqual(null, ctx.getSlot(getBaz));
+    try expectEventLog(ctx, "baz|bar|foo|");
+
+    try std.testing.expectEqual(11, (try baz(ctx)).*);
+    try std.testing.expect(ctx.getSlot(getFoo) != null);
+    try std.testing.expect(ctx.getSlot(getBar) != null);
+    try std.testing.expect(ctx.getSlot(getBaz) != null);
+    try expectEventLog(ctx, "baz|bar|foo|baz|bar|");
 }
