@@ -236,12 +236,16 @@ test "cellFn: get/set + invalidate cache" {
     const ctx = try Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const hello = comptime initCellFn(String, struct {
-        fn call(_ctx: *Context) anyerror!String {
-            try (try slotEventLog(_ctx)).append("hello|");
-            return "Hello";
-        }
-    }.call, null);
+    const hello = comptime initCellFn(
+        String,
+        struct {
+            fn call(_ctx: *Context) anyerror!String {
+                try (try slotEventLog(_ctx)).append("hello|");
+                return "Hello";
+            }
+        }.call,
+        null,
+    );
 
     const getName = struct {
         fn call(_ctx: *Context) !String {

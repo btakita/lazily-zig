@@ -3,6 +3,7 @@ const lazily = @import("lazily");
 const Context = lazily.Context;
 const slot = lazily.slot;
 const deinitSlotValue = lazily.deinitSlotValue;
+const initSlotFn = lazily.initSlotFn;
 const Owned = lazily.Owned;
 const OwnedString = lazily.OwnedString;
 const StringView = lazily.StringView;
@@ -14,15 +15,18 @@ fn authenticate() []const u8 {
     return "very_secret_token";
 }
 
-const deinitAuthToken = deinitSlotValue(AuthToken, null);
+const deinitAuthToken = deinitSlotValue(
+    AuthToken,
+    null,
+);
 
 fn getAuthToken(ctx: *Context) !AuthToken {
     const auth_token = authenticate();
     return AuthToken.managed(try ctx.allocator.dupe(u8, auth_token));
 }
 
-// Lazily get an Auth Token using the lazily.slot function.
-// Which accepts separate value getter function and optional deinit functions.
+/// Lazily get an Auth Token using the lazily.slot function.
+/// Which accepts separate value getter function and optional deinit functions.
 pub fn slotAuthToken(ctx: *Context) !*AuthToken {
     return try slot(AuthToken, ctx, getAuthToken, deinitAuthToken);
 }
@@ -37,7 +41,7 @@ test "slotAuthToken" {
     );
 }
 
-pub const slotAuthToken_initSlotFn = lazily.initSlotFn(
+pub const slotAuthToken_initSlotFn = initSlotFn(
     AuthToken,
     getAuthToken,
     deinitAuthToken,
@@ -65,6 +69,10 @@ export fn slotAuthTokenFFI(ctx: *Context) callconv(.c) StringView {
     return StringView.fromSlice(token.value);
 }
 comptime {
-    // Support both camelCase and snake_case for FFI functions that target platforms with different name conventions.
-    @export(&slotAuthTokenFFI, .{ .name = "slot_auth_token_ffi" });
+    // Support both camelCase and snake_case for FFI functions...
+    // that target platforms with different name conventions.
+    @export(
+        &slotAuthTokenFFI,
+        .{ .name = "slot_auth_token_ffi" },
+    );
 }

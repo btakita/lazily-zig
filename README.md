@@ -9,3 +9,4 @@ The main use case is Zig libraries for cross-platform logic via FFI. Building dy
 ## Example Usage
 
 - [auth](./src/examples/auth/root.zig)
+- [cells](./src/examples/cells/root.zig)

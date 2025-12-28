@@ -19,6 +19,9 @@ pub const slot = slot_mod.slot;
 pub const slotKeyed = slot_mod.slotKeyed;
 pub const initSlotFn = slot_mod.initSlotFn;
 pub const StringView = slot_mod.StringView;
+const test_mod = @import("./lazily/test.zig");
+const slotEventLog = test_mod.slotEventLog;
+const expectEventLog = test_mod.expectEventLog;
 
 test {
     std.testing.refAllDecls(@This());
