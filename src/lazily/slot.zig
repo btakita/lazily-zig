@@ -258,3 +258,72 @@ test "Slot.emitChange" {
     try std.testing.expect(ctx.getSlot(getBaz) != null);
     try expectEventLog(ctx, "baz|bar|foo|baz|bar|");
 }
+
+test "Slot.touch" {
+    const ctx = try Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const getFoo = struct {
+        fn call(_ctx: *Context) !u8 {
+            try (try slotEventLog(_ctx)).append("foo|");
+            return 1;
+        }
+    }.call;
+    const foo = comptime initSlotFn(
+        u8,
+        getFoo,
+        null,
+    );
+
+    const getBar = struct {
+        fn call(_ctx: *Context) !u8 {
+            try (try slotEventLog(_ctx)).append("bar|");
+            return (try foo(_ctx)).* * 10;
+        }
+    }.call;
+    const bar = comptime initSlotFn(
+        u8,
+        getBar,
+        null,
+    );
+
+    const getBaz = struct {
+        fn call(_ctx: *Context) !u8 {
+            try (try slotEventLog(_ctx)).append("baz|");
+            return (try bar(_ctx)).* + 1;
+        }
+    }.call;
+    const baz = comptime initSlotFn(
+        u8,
+        getBaz,
+        null,
+    );
+
+    try std.testing.expectEqual(null, ctx.getSlot(getFoo));
+    try std.testing.expectEqual(null, ctx.getSlot(getBar));
+    try std.testing.expectEqual(null, ctx.getSlot(getBaz));
+    try expectEventLog(ctx, "");
+
+    try std.testing.expectEqual(11, (try baz(ctx)).*);
+    try std.testing.expect(ctx.getSlot(getFoo) != null);
+    try std.testing.expect(ctx.getSlot(getBar) != null);
+    try std.testing.expect(ctx.getSlot(getBaz) != null);
+    try expectEventLog(ctx, "baz|bar|foo|");
+
+    if (ctx.getSlot(getFoo)) |foo_slot| {
+        foo_slot.touch();
+    } else {
+        return error.FooNotFound;
+    }
+
+    try std.testing.expectEqual(null, ctx.getSlot(getFoo));
+    try std.testing.expectEqual(null, ctx.getSlot(getBar));
+    try std.testing.expectEqual(null, ctx.getSlot(getBaz));
+    try expectEventLog(ctx, "baz|bar|foo|");
+
+    try std.testing.expectEqual(11, (try baz(ctx)).*);
+    try std.testing.expect(ctx.getSlot(getFoo) != null);
+    try std.testing.expect(ctx.getSlot(getBar) != null);
+    try std.testing.expect(ctx.getSlot(getBaz) != null);
+    try expectEventLog(ctx, "baz|bar|foo|baz|bar|foo|");
+}

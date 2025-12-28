@@ -250,12 +250,39 @@ pub const Slot = struct {
         _ = child.parents.remove(self);
     }
 
+    /// Thread-safe call to Slot.touchUnlocked.
+    pub fn touch(self: *Slot) void {
+        self.ctx.mutex.lock();
+        defer self.ctx.mutex.unlock();
+        self.touchUnlocked();
+    }
+
+    /// Slot.touchUnlocked expires self and expires all dependent Slots.
+    /// See Slot.subscribeChange and Slot.emitChangeUnlocked.
+    pub fn touchUnlocked(self: *Slot) void {
+        self.destroyUnlocked(true);
+    }
+
+    /// Thread-safe call to Slot.emitChangeUnlocked.
     pub fn emitChange(self: *Slot) void {
         self.ctx.mutex.lock();
         defer self.ctx.mutex.unlock();
         self.emitChangeUnlocked();
     }
 
+    /// Emits the change event to all change_subscribers. See Slot.subscribeChange.
+    /// The change event will expire all subscribed Slots.
+    ///
+    /// The current behavior of expiration is to destroy the Slot instance...
+    /// Where the Slot is reinstantiated the next time the slot function is called.
+    ///
+    /// Future plans include making the Slot instance remain but with its value cleared.
+    /// This plan will allow a Cell to keep any value changes using `Cell.set` and for the Signal implementation.
+    ///
+    /// Note this function doesn't destroy the Slot itself. See Slot.touch if you want this behavior.
+    ///
+    /// TODO: Slot will remain when expired. Clear value when expired.
+    /// TODO: Provide methods in Cell to track a Slot used to create the value passed into Cell.set.
     pub fn emitChangeUnlocked(self: *Slot) void {
         var iter = self.change_subscribers.keyIterator();
         while (iter.next()) |ptr| {
