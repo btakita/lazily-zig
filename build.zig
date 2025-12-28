@@ -156,9 +156,16 @@ pub fn build(b: *std.Build) void {
     // A run step that will run the second test executable.
     const run_exe_tests = b.addRunArtifact(exe_tests);
 
-    const example_auth_mod = b.addModule("lazily_example_auth", .{ .root_source_file = b.path("src/examples/auth/root.zig"), .target = target, .imports = &.{
-        .{ .name = "lazily", .module = mod },
-    } });
+    const example_auth_mod = b.addModule(
+        "lazily_example_auth",
+        .{
+            .root_source_file = b.path("src/examples/auth/root.zig"),
+            .target = target,
+            .imports = &.{
+                .{ .name = "lazily", .module = mod },
+            },
+        },
+    );
     const example_auth_mod_tests = b.addTest(.{
         .root_module = example_auth_mod,
         .filters = test_filter,
@@ -166,12 +173,20 @@ pub fn build(b: *std.Build) void {
     const run_example_auth_mod_tests = b.addRunArtifact(example_auth_mod_tests);
     const install_example_auth_mod_tests = b.addInstallArtifact(
         example_auth_mod_tests,
-        .{ .dest_dir = .{ .override = .{ .custom = "tests" } } },
+        .{
+            .dest_dir = .{
+                .override = .{ .custom = "tests" },
+            },
+        },
     );
 
-    const example_cells_mod = b.addModule("lazily_example_auth", .{ .root_source_file = b.path("src/examples/auth/root.zig"), .target = target, .imports = &.{
-        .{ .name = "lazily", .module = mod },
-    } });
+    const example_cells_mod = b.addModule("lazily_example_auth", .{
+        .root_source_file = b.path("src/examples/auth/root.zig"),
+        .target = target,
+        .imports = &.{
+            .{ .name = "lazily", .module = mod },
+        },
+    });
     const example_cells_mod_tests = b.addTest(.{
         .root_module = example_cells_mod,
         .filters = test_filter,
@@ -179,7 +194,11 @@ pub fn build(b: *std.Build) void {
     const run_example_cells_mod_tests = b.addRunArtifact(example_cells_mod_tests);
     const install_example_cells_mod_tests = b.addInstallArtifact(
         example_cells_mod_tests,
-        .{ .dest_dir = .{ .override = .{ .custom = "tests" } } },
+        .{
+            .dest_dir = .{
+                .override = .{ .custom = "tests" },
+            },
+        },
     );
 
     // A top level step for running all tests. dependOn can be called multiple
