@@ -105,11 +105,11 @@ pub fn deinitSlotValue(
                     // T is not a pointer, check for deinit method
                     if (comptime @typeInfo(T) == .@"struct" and
                         @hasDecl(T, "deinit"))
-                        {
-                            // For indirect, val should be single_ptr pointing to T
+                    {
+                        // For indirect, val should be single_ptr pointing to T
                         var mutable_value = value;
-                            mutable_value.deinit(_ctx);
-                        }
+                        mutable_value.deinit(_ctx);
+                    }
                 },
             }
         }
