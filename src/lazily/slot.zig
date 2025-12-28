@@ -59,7 +59,6 @@ pub fn slotKeyed(
             if (current_slot) |child_slot| {
                 // We are holding the lock, so we can use Unlocked
                 try cached_slot.subscribeChangeUnlocked(child_slot);
-                // try child_slot.subscribeChange(cached_slot);
             }
             const tuple = cached_slot.get(T);
             ctx.mutex.unlock();

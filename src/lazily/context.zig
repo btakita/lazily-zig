@@ -26,7 +26,7 @@ pub const Context = struct {
 
     pub fn deinit(self: *Context) void {
         self.mutex.lock();
-        // The mutex is not unlocked due to this being deinit deallocating self.
+        // The mutex is not unlocked due to this being deinit which deallocates self.
 
         var iter = self.cache.valueIterator();
         while (iter.next()) |ptr| {
