@@ -25,13 +25,13 @@ pub const Context = struct {
     }
 
     pub fn deinit(self: *Context) void {
-        // self.mutex.lock();
-        // defer self.mutex.unlock();
+        self.mutex.lock();
+        // The mutex is not unlocked due to this being deinit deallocating self.
 
         var iter = self.cache.valueIterator();
         while (iter.next()) |ptr| {
             const context_slot = ptr.*;
-            context_slot.destroy(false);
+            context_slot.destroyUnlocked(false);
         }
         self.cache.deinit();
         self.allocator.destroy(self);
@@ -40,6 +40,8 @@ pub const Context = struct {
     /// Get a Slot. Slot.destroy() will deinit and remove the Slot from the Context.cache.
     pub fn getSlot(self: *Context, fnc: anytype) ?*Slot {
         const key = valueFnCacheKey(fnc);
+        self.mutex.lock();
+        defer self.mutex.unlock();
         return self.cache.get(key);
     }
 };
@@ -77,7 +79,7 @@ pub fn valueFnCacheKey(valueFn: anytype) usize {
     const type_info = @typeInfo(@TypeOf(valueFn));
 
     return switch (type_info) {
-        // If caller passes a function (not a pointer), take its address.
+    // If caller passes a function (not a pointer), take its address.
         .@"fn" => @intFromPtr(&valueFn),
 
         // If caller passes a function pointer, use it directly.
@@ -182,6 +184,14 @@ pub const Slot = struct {
                 },
             },
         );
+
+        ctx.mutex.lock();
+        defer ctx.mutex.unlock();
+        if (ctx.cache.get(key)) |existing| {
+            self.destroyUnlocked(false);
+            return existing;
+        }
+
         try ctx.cache.put(key, self);
         return self;
     }
@@ -229,6 +239,12 @@ pub const Slot = struct {
     }
 
     pub fn unsubscribeChange(self: *Slot, child: *Slot) void {
+        self.ctx.mutex.lock();
+        defer self.ctx.mutex.unlock();
+        try self.unsubscribeChangeUnlocked(child);
+    }
+
+    pub fn unsubscribeChangeUnlocked(self: *Slot, child: *Slot) void {
         _ = self.change_subscribers.remove(child);
         _ = child.parents.remove(self);
     }
@@ -243,13 +259,19 @@ pub const Slot = struct {
         var iter = self.change_subscribers.keyIterator();
         while (iter.next()) |ptr| {
             const dependent_slot = ptr.*;
-            dependent_slot.destroy(true);
+            dependent_slot.destroyUnlocked(true);
         }
         // Clear the subscribers since they've been destroyed
         self.change_subscribers.clearRetainingCapacity();
     }
 
     pub fn destroy(self: *Slot, recurse: ?bool) void {
+        self.ctx.mutex.lock();
+        defer self.ctx.mutex.unlock();
+        self.destroyUnlocked(recurse);
+    }
+
+    pub fn destroyUnlocked(self: *Slot, recurse: ?bool) void {
         // Remove from cache if not already cleared by Context.deinit
         if (self.cache_key) |key| {
             _ = self.ctx.cache.remove(key);
@@ -257,27 +279,27 @@ pub const Slot = struct {
             _ = self.ctx.cache.remove(@intFromPtr(self.value_fn_ptr));
         }
 
-        self.destroyInCache(recurse);
+        self.destroyInCacheUnlocked(recurse);
 
         self.parents.deinit();
         self.ctx.allocator.destroy(self);
     }
 
     /// Destroys the value and its subscribers recursively.
-    /// Used for cache invalidation.
-    pub fn destroyInCache(self: *Slot, recurse: ?bool) void {
+    /// Internal version: assumes ctx.mutex is ALREADY held.
+    pub fn destroyInCacheUnlocked(self: *Slot, recurse: ?bool) void {
         if (self.storage) |storage| {
             if (recurse == null or recurse == true) {
                 var parents_iter = self.parents.keyIterator();
                 while (parents_iter.next()) |ptr| {
                     const parent_slot = ptr.*;
-                    parent_slot.unsubscribeChange(self);
+                    parent_slot.unsubscribeChangeUnlocked(self);
                 }
 
                 var subscribers_iter = self.change_subscribers.keyIterator();
                 while (subscribers_iter.next()) |ptr| {
                     const dependent_slot = ptr.*;
-                    dependent_slot.destroy(true);
+                    dependent_slot.destroyUnlocked(true);
                 }
             }
 
