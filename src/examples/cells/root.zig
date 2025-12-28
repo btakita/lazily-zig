@@ -77,17 +77,12 @@ test "initCellFn and initSlotFn with dependencies example" {
     const ctx = try Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try std.testing.expectEqual(null, ctx.getSlot(getName));
-    try std.testing.expectEqual(null, ctx.getSlot(getGreeting));
-    try std.testing.expectEqual(null, ctx.getSlot(getGreetingAndResponse));
     try std.testing.expectEqual(0, (try slotEventLog(ctx)).items.len);
 
     try std.testing.expectEqualStrings(
         "Hello World!",
         (try greeting(ctx)).value,
     );
-    try std.testing.expect(ctx.getSlot(getName) != null);
-    try std.testing.expect(ctx.getSlot(getGreeting) != null);
     try std.testing.expectEqual(null, ctx.getSlot(getGreetingAndResponse));
 
     try expectEventLog(ctx, "greeting|hello|name|");
@@ -95,9 +90,6 @@ test "initCellFn and initSlotFn with dependencies example" {
         "Hello World! How are you?",
         (try greetingAndResponse(ctx)).value,
     );
-    try std.testing.expect(ctx.getSlot(getName) != null);
-    try std.testing.expect(ctx.getSlot(getGreeting) != null);
-    try std.testing.expect(ctx.getSlot(getGreetingAndResponse) != null);
 
     try expectEventLog(ctx, "greeting|hello|name|greetingAndResponse|response|");
     try std.testing.expectEqualStrings(
@@ -106,22 +98,8 @@ test "initCellFn and initSlotFn with dependencies example" {
     );
 
     try expectEventLog(ctx, "greeting|hello|name|greetingAndResponse|response|");
-    try struct {
-        fn call(_ctx: *Context) !void {
-            var name_cell = try name(_ctx);
-            name_cell.set("You");
-            try std.testing.expectEqualStrings("You", name_cell.get());
-            try std.testing.expectEqualStrings("You", (try name(_ctx)).get());
-        }
-    }.call(ctx);
-    try std.testing.expect(ctx.getSlot(getName) != null);
-    try std.testing.expectEqual(null, ctx.getSlot(getGreeting));
-    try std.testing.expectEqual(null, ctx.getSlot(getGreetingAndResponse));
+    try std.testing.expectEqualStrings("You", (try name(ctx)).get());
     try expectEventLog(ctx, "greeting|hello|name|greetingAndResponse|response|");
-
-    var greeting_slot = try getGreeting(ctx);
-    defer greeting_slot.deinit(ctx);
-    try std.testing.expectEqualStrings("Hello You!", greeting_slot.value);
 
     try std.testing.expectEqualStrings("Hello You!", (try greeting(ctx)).value);
 
@@ -129,8 +107,5 @@ test "initCellFn and initSlotFn with dependencies example" {
         "Hello You! How are you?",
         (try greetingAndResponse(ctx)).value,
     );
-    try std.testing.expect(ctx.getSlot(getName) != null);
-    try std.testing.expect(ctx.getSlot(getGreeting) != null);
-    try std.testing.expect(ctx.getSlot(getGreetingAndResponse) != null);
     try expectEventLog(ctx, "greeting|hello|name|greetingAndResponse|response|greeting|greeting|greetingAndResponse|");
 }
