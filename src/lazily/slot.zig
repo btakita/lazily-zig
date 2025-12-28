@@ -50,20 +50,23 @@ pub fn slotKeyed(
     valueFn: *const ValueFn(T),
     deinit: ?DeinitPayloadFn,
 ) !Slot.Result(T) {
-    // ctx.mutex.lock();
-    // defer ctx.mutex.unlock();
+    ctx.mutex.lock();
 
     // Check cache
     if (ctx.cache.get(key)) |cached_slot| {
         if (cached_slot.storage != null) {
             const current_slot: ?*Slot = currentSlotFor(ctx);
             if (current_slot) |child_slot| {
-                try cached_slot.subscribeChange(child_slot);
+                // We are holding the lock, so we can use Unlocked
+                try cached_slot.subscribeChangeUnlocked(child_slot);
                 // try child_slot.subscribeChange(cached_slot);
             }
-            return cached_slot.get(T);
+            const tuple = cached_slot.get(T);
+            ctx.mutex.unlock();
+            return tuple;
         }
     }
+    ctx.mutex.unlock();
 
     // Create a free function that knows the type T
     var new_slot = try Slot.initKeyed(
@@ -103,11 +106,11 @@ pub fn deinitSlotValue(
                     // T is not a pointer, check for deinit method
                     if (comptime @typeInfo(T) == .@"struct" and
                         @hasDecl(T, "deinit"))
-                    {
-                        // For indirect, val should be single_ptr pointing to T
+                        {
+                            // For indirect, val should be single_ptr pointing to T
                         var mutable_value = value;
-                        mutable_value.deinit(_ctx);
-                    }
+                            mutable_value.deinit(_ctx);
+                        }
                 },
             }
         }

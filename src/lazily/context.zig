@@ -218,6 +218,12 @@ pub const Slot = struct {
     }
 
     pub fn subscribeChange(self: *Slot, child: *Slot) !void {
+        self.ctx.mutex.lock();
+        defer self.ctx.mutex.unlock();
+        try self.subscribeChangeUnlocked(child);
+    }
+
+    pub fn subscribeChangeUnlocked(self: *Slot, child: *Slot) !void {
         _ = try self.change_subscribers.getOrPut(child);
         _ = try child.parents.getOrPut(self);
     }
