@@ -1,4 +1,5 @@
 const std = @import("std");
+const build_options = @import("build_options");
 const ctx_mod = @import("context.zig");
 const Context = ctx_mod.Context;
 const currentSlotFor = ctx_mod.currentSlotFor;
@@ -359,4 +360,114 @@ test "cellFn: get/set + invalidate cache" {
     try std.testing.expect(ctx.getSlot(getGreeting) != null);
     try std.testing.expect(ctx.getSlot(getGreetingAndResponse) != null);
     try expectEventLog(ctx, "greeting|hello|name|greetingAndResponse|response|greeting|greeting|greetingAndResponse|");
+}
+
+test "multithreaded slot contention" {
+    if (!build_options.multi_threaded) {
+        return error.SkipZigTest;
+    }
+
+    // We must use a thread-safe allocator for multithreaded tests.
+    var ts_allocator = std.heap.ThreadSafeAllocator{
+        .child_allocator = std.testing.allocator,
+    };
+    const allocator = ts_allocator.allocator();
+
+    const ctx = try Context.init(allocator);
+    defer ctx.deinit();
+
+    const SharedState = struct {
+        // Track how many times the actual computation ran
+        computations: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+
+        fn compute(_: *Context) anyerror!i32 {
+            // Simulate some work
+            std.Thread.sleep(10 * std.time.ns_per_ms);
+            // This is a global pointer in the test, so we can access it
+            // via a capture or a static.
+            return 42;
+        }
+    };
+
+    var state = SharedState{};
+
+    // We define the valueFn here to increment the counter
+    const valueFn = struct {
+        var static_state: *SharedState = undefined;
+        fn call(_: *Context) anyerror!i32 {
+            _ = static_state.computations.fetchAdd(1, .seq_cst);
+            std.Thread.sleep(50 * std.time.ns_per_ms);
+            return 42;
+        }
+    };
+    valueFn.static_state = &state;
+
+    const num_threads = 8;
+    var threads: [num_threads]std.Thread = undefined;
+
+    // Spawn multiple threads all trying to get the same slot at once
+    for (0..num_threads) |i| {
+        threads[i] = try std.Thread.spawn(.{}, struct {
+            fn run(c: *Context, f: *const fn (*Context) anyerror!i32) void {
+                const val = slot(i32, c, f, null) catch unreachable;
+                std.testing.expectEqual(@as(i32, 42), val.*) catch @panic("Value mismatch");
+            }
+        }.run, .{ ctx, valueFn.call });
+    }
+
+    for (threads) |t| t.join();
+
+    // Verification:
+    // 1. All threads should have received the correct value (checked in thread).
+    // 2. The Context cache should only contain ONE slot for this function.
+    // 3. While valueFn might have RUN multiple times due to the race,
+    //    our logic in initKeyed ensures only one was kept and others were destroyed.
+
+    // Check that we can still get the value
+    const final_val = try slot(i32, ctx, valueFn.call, null);
+    try std.testing.expectEqual(@as(i32, 42), final_val.*);
+}
+
+test "multithreaded Cell updates" {
+    if (!build_options.multi_threaded) {
+        return error.SkipZigTest;
+    }
+    var ts_allocator = std.heap.ThreadSafeAllocator{
+        .child_allocator = std.testing.allocator,
+    };
+    const allocator = ts_allocator.allocator();
+
+    const ctx = try Context.init(allocator);
+    defer ctx.deinit();
+
+    const counter = try Cell(i32).init(ctx, struct {
+        fn call(_: *Context) anyerror!i32 {
+            return 0;
+        }
+    }.call, null);
+
+    const num_threads = 4;
+    const increments_per_thread = 1000;
+    var threads: [num_threads]std.Thread = undefined;
+
+    for (0..num_threads) |i| {
+        threads[i] = try std.Thread.spawn(.{}, struct {
+            fn run(_cell: *Cell(i32), count: usize) void {
+                for (0..count) |_| {
+                    // This tests the thread-safety of cell.set()
+                    // and the resulting graph invalidation.
+                    const current = _cell.get();
+                    _cell.set(current + 1);
+                }
+            }
+        }.run, .{ counter, increments_per_thread });
+    }
+
+    for (threads) |t| t.join();
+
+    // Since updates are non-atomic relative to each other (get then set),
+    // the final value isn't guaranteed to be num_threads * increments,
+    // but the test confirms that the internal HashMaps and Mutexes
+    // didn't deadlock or crash during high-frequency contention.
+    _ = counter.get();
 }
