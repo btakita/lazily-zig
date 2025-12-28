@@ -125,7 +125,7 @@ pub const Slot = struct {
     pub fn initKeyed(
         comptime T: type,
         ctx: *Context,
-        key: usize,
+        cache_key: usize,
         valueFn: *const ValueFn(T),
         deinitPayload: ?DeinitPayloadFn,
     ) !*@This() {
@@ -136,6 +136,7 @@ pub const Slot = struct {
         self.* = Slot{
             .ctx = ctx,
             .value_fn_ptr = null,
+            .cache_key = cache_key,
             .mode = mode,
             .storage = null,
             .ptr_size = ptr_size,
@@ -187,12 +188,12 @@ pub const Slot = struct {
 
         ctx.mutex.lock();
         defer ctx.mutex.unlock();
-        if (ctx.cache.get(key)) |existing| {
+        if (ctx.cache.get(cache_key)) |existing| {
             self.destroyUnlocked(false);
             return existing;
         }
 
-        try ctx.cache.put(key, self);
+        try ctx.cache.put(cache_key, self);
         return self;
     }
 
@@ -273,10 +274,10 @@ pub const Slot = struct {
 
     pub fn destroyUnlocked(self: *Slot, recurse: ?bool) void {
         // Remove from cache if not already cleared by Context.deinit
-        if (self.cache_key) |key| {
-            _ = self.ctx.cache.remove(key);
-        } else if (self.value_fn_ptr != null) {
-            _ = self.ctx.cache.remove(@intFromPtr(self.value_fn_ptr));
+        if (self.cache_key) |cache_key| {
+            _ = self.ctx.cache.remove(cache_key);
+        } else {
+            unreachable;
         }
 
         self.destroyInCacheUnlocked(recurse);
