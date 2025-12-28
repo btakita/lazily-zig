@@ -1,22 +1,25 @@
 const std = @import("std");
+const build_options = @import("build_options");
 
 /// Context with lazy cache
 pub const Context = struct {
     allocator: std.mem.Allocator,
     // Function pointer -> cached result
     cache: std.AutoHashMap(usize, *Slot),
-    // mutex: std.Thread.Mutex,
+    // Use a real Mutex if multi_threaded is true, otherwise use a "no-op" struct
+    mutex: if (build_options.multi_threaded) std.Thread.Mutex else struct {
+        pub fn lock(_: *@This()) void {}
+        pub fn unlock(_: *@This()) void {}
+    } = .{},
 
     pub fn init(allocator: std.mem.Allocator) !*Context {
         const ctx = try allocator.create(Context);
         ctx.* = .{
             .allocator = allocator,
-            // Not thread-safe
             .cache = std.AutoHashMap(
                 usize,
                 *Slot,
             ).init(allocator),
-            // .mutex = .{},
         };
         return ctx;
     }
