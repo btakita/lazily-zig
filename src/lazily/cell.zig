@@ -369,10 +369,8 @@ test "cellFn: get/set + invalidate cache" {
     try expectEventLog(ctx, "greeting|hello|name|greetingAndResponse|response|greeting|greeting|greetingAndResponse|");
 }
 
-test "multithreaded slot contention" {
-    if (!build_options.thread_safe) {
-        return error.SkipZigTest;
-    }
+test "thread_safe slot contention" {
+    if (!build_options.thread_safe) return error.SkipZigTest;
 
     // We must use a thread-safe allocator for multithreaded tests.
     var ts_allocator = std.heap.ThreadSafeAllocator{
@@ -435,10 +433,9 @@ test "multithreaded slot contention" {
     try std.testing.expectEqual(@as(i32, 42), final_val.*);
 }
 
-test "multithreaded Cell updates" {
-    if (!build_options.thread_safe) {
-        return error.SkipZigTest;
-    }
+test "thread_safe Cell updates" {
+    if (!build_options.thread_safe) return error.SkipZigTest;
+
     var ts_allocator = std.heap.ThreadSafeAllocator{
         .child_allocator = std.testing.allocator,
     };
