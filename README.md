@@ -6,6 +6,22 @@ This project is still in early stages. Will use similar semantics as [lazily-py]
 
 The main use case is Zig libraries for cross-platform logic via FFI. Building dynamic libraries for Native Apps/Flutter + servers and WASM for browsers.
 
+## Test Build
+
+This project uses mise.
+
+[Install mise](https://mise.jdx.dev/getting-started.html)
+
+```sh
+mise trust
+```
+
+```sh
+mise run test
+# mise run test_0_15_2
+# mise run test_master
+```
+
 ## Terminology
 
 ### Context
