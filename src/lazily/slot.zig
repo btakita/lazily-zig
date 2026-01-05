@@ -1,14 +1,13 @@
 const std = @import("std");
-const ctx_mod = @import("./context.zig");
-const Context = ctx_mod.Context;
-const currentSlotFor = ctx_mod.currentSlotFor;
-const popTracking = ctx_mod.popTracking;
-const pushTracking = ctx_mod.pushTracking;
-const Slot = ctx_mod.Slot;
-const String = ctx_mod.String;
-const TrackingFrame = ctx_mod.TrackingFrame;
-const ValueFn = ctx_mod.ValueFn;
-const valueFnCacheKey = ctx_mod.valueFnCacheKey;
+const Context = @import("./context.zig").Context;
+const currentSlotFor = @import("./context.zig").currentSlotFor;
+const popTracking = @import("./context.zig").popTracking;
+const pushTracking = @import("./context.zig").pushTracking;
+const Slot = @import("./context.zig").Slot;
+const String = @import("./context.zig").String;
+const TrackingFrame = @import("./context.zig").TrackingFrame;
+const ValueFn = @import("./context.zig").ValueFn;
+const valueFnCacheKey = @import("./context.zig").valueFnCacheKey;
 const DeinitPayloadFn = Slot.DeinitPayloadFn;
 const DeinitValueFn = Slot.DeinitValueFn;
 const Free = Slot.Free;
@@ -16,9 +15,8 @@ const Mode = Slot.Mode;
 const Storage = Slot.Storage;
 const StorageKind = Slot.StorageKind;
 const StoredType = Slot.Result;
-const test_mod = @import("test.zig");
-const slotEventLog = test_mod.slotEventLog;
-const expectEventLog = test_mod.expectEventLog;
+const slotEventLog = @import("test.zig").slotEventLog;
+const expectEventLog = @import("test.zig").expectEventLog;
 
 pub fn initSlotFn(
     comptime T: type,
