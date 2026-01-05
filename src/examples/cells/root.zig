@@ -94,6 +94,8 @@ test "initCellFn and initSlotFn with dependencies example" {
         (try greetingAndResponse(ctx)).value,
     );
 
+    (try name(ctx)).set("You");
+
     try expectEventLog(ctx, "greeting|hello|name|greetingAndResponse|response|");
     try std.testing.expectEqualStrings("You", (try name(ctx)).get());
     try expectEventLog(ctx, "greeting|hello|name|greetingAndResponse|response|");
@@ -104,5 +106,5 @@ test "initCellFn and initSlotFn with dependencies example" {
         "Hello You! How are you?",
         (try greetingAndResponse(ctx)).value,
     );
-    try expectEventLog(ctx, "greeting|hello|name|greetingAndResponse|response|greeting|greeting|greetingAndResponse|");
+    try expectEventLog(ctx, "greeting|hello|name|greetingAndResponse|response|greeting|greetingAndResponse|");
 }

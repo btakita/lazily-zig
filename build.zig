@@ -182,13 +182,15 @@ pub fn build(b: *std.Build) void {
         example_auth_mod_tests,
         .{
             .dest_dir = .{
-                .override = .{ .custom = "tests" },
+                .override = .{
+                    .custom = "tests",
+                },
             },
         },
     );
 
-    const example_cells_mod = b.addModule("lazily_example_auth", .{
-        .root_source_file = b.path("src/examples/auth/root.zig"),
+    const example_cells_mod = b.addModule("lazily_example_cells", .{
+        .root_source_file = b.path("src/examples/cells/root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "lazily", .module = mod },

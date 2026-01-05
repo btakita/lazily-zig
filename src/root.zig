@@ -8,8 +8,9 @@ pub const initCellFn = cell_mod.initCellFn;
 const ctx_mod = @import("./lazily/context.zig");
 pub const Context = ctx_mod.Context;
 pub const Owned = ctx_mod.Owned;
-pub const Slot = ctx_mod.Slot;
 pub const OwnedString = ctx_mod.OwnedString;
+pub const Slot = ctx_mod.Slot;
+pub const String = ctx_mod.String;
 pub const valueFnCacheKey = ctx_mod.valueFnCacheKey;
 pub const ValueFn = ctx_mod.ValueFn;
 const slot_mod = @import("./lazily/slot.zig");
@@ -19,8 +20,8 @@ pub const slotKeyed = slot_mod.slotKeyed;
 pub const initSlotFn = slot_mod.initSlotFn;
 pub const StringView = slot_mod.StringView;
 const test_mod = @import("./lazily/test.zig");
-const slotEventLog = test_mod.slotEventLog;
-const expectEventLog = test_mod.expectEventLog;
+pub const slotEventLog = test_mod.slotEventLog;
+pub const expectEventLog = test_mod.expectEventLog;
 
 test {
     std.testing.refAllDecls(@This());
