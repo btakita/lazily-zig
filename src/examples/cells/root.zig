@@ -70,7 +70,7 @@ pub const greetingAndResponse = initSlotFn(
     deinitSlotValue(OwnedString, null),
 );
 
-test "initCellFn and initSlotFn with dependencies example" {
+test "examples/cells: initCellFn and initSlotFn with dependencies example" {
     const ctx = try Context.init(std.testing.allocator);
     defer ctx.deinit();
 

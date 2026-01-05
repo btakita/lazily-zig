@@ -1,5 +1,6 @@
 const std = @import("std");
 const build_options = @import("build_options");
+const FfiResult = @import("ffi.zig").FfiResult;
 
 /// Context with lazy cache
 pub const Context = struct {
@@ -104,7 +105,7 @@ pub const Slot = struct {
     ptr_size: std.builtin.Type.Pointer.Size,
     change_subscribers: std.AutoHashMap(*Slot, void),
     parents: std.AutoHashMap(*Slot, void),
-    deinit: ?*const fn (*Slot) void,
+    deinitPayload: ?*const fn (*Slot) void,
     free: ?*const fn (std.mem.Allocator, *anyopaque) void = null,
 
     pub fn init(
@@ -148,7 +149,7 @@ pub const Slot = struct {
                 *Slot,
                 void,
             ).init(ctx.allocator),
-            .deinit = deinitPayload,
+            .deinitPayload = deinitPayload,
             .free = if (mode == .indirect) free else null,
         };
 
@@ -167,7 +168,11 @@ pub const Slot = struct {
         defer popTracking(&frame);
 
         const value = try valueFn(ctx);
-        const stored_value = try Storage.toStoredType(T, ctx, value);
+        const stored_value = try Storage.toStoredType(
+            T,
+            ctx,
+            value,
+        );
         self.value_fn_ptr = @ptrCast(@constCast(valueFn));
 
         self.storage = Storage.init(
@@ -328,8 +333,8 @@ pub const Slot = struct {
                 }
             }
 
-            if (self.deinit) |deinit_fn| {
-                deinit_fn(self);
+            if (self.deinitPayload) |deinitPayload| {
+                deinitPayload(self);
             }
             if (self.mode == .indirect) {
                 if (self.free) |free_fn| {
@@ -394,9 +399,9 @@ pub const Slot = struct {
             return switch (comptime Mode(T)) {
                 .direct => value,
                 .indirect => blk: {
-                    const p = try ctx.allocator.create(T);
-                    p.* = value;
-                    break :blk p;
+                    const stored_value = try ctx.allocator.create(T);
+                    stored_value.* = value;
+                    break :blk stored_value;
                 },
             };
         }
@@ -529,8 +534,24 @@ pub fn currentSlotFor(ctx: *Context) ?*Slot {
     return null;
 }
 
-export fn initContext() ?*Context {
-    return Context.init(std.heap.page_allocator) catch null;
+export fn initContext() FfiResult {
+    // TODO: Option to use c_allocator.
+    // - Max throughput
+    // - Multi-thread scaling
+    // - Long running process stability
+    // TODO: Option to use ArenaAllocator
+    // - Purely Additive Caching (Immutable Graphs)
+    // - Batch Jobs
+    const allocator = std.heap.c_allocator;
+
+    const ctx = Context.init(allocator) catch |err| {
+        return FfiResult.initError(
+            @intFromError(err),
+            "Failed to initialize Context",
+        );
+    };
+
+    return FfiResult.initSuccess(ctx);
 }
 comptime {
     @export(&initContext, .{ .name = "init_context" });
