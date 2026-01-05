@@ -1,0 +1,6 @@
+[tools]
+zig = "master"
+zls = "master"
+
+[env]
+_.path = "./.local/bin"
