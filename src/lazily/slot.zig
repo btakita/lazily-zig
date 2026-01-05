@@ -1,14 +1,15 @@
 const std = @import("std");
-const ctx_mod = @import("./context.zig");
-const Context = ctx_mod.Context;
-const currentSlotFor = ctx_mod.currentSlotFor;
-const popTracking = ctx_mod.popTracking;
-const pushTracking = ctx_mod.pushTracking;
-const Slot = ctx_mod.Slot;
-const String = ctx_mod.String;
-const TrackingFrame = ctx_mod.TrackingFrame;
-const ValueFn = ctx_mod.ValueFn;
-const valueFnCacheKey = ctx_mod.valueFnCacheKey;
+const Io = std.Io;
+const build_options = @import("build_options");
+const Context = @import("./context.zig").Context;
+const currentSlotFor = @import("./context.zig").currentSlotFor;
+const popTracking = @import("./context.zig").popTracking;
+const pushTracking = @import("./context.zig").pushTracking;
+const Slot = @import("./context.zig").Slot;
+const String = @import("./context.zig").String;
+const TrackingFrame = @import("./context.zig").TrackingFrame;
+const ValueFn = @import("./context.zig").ValueFn;
+const valueFnCacheKey = @import("./context.zig").valueFnCacheKey;
 const DeinitPayloadFn = Slot.DeinitPayloadFn;
 const DeinitValueFn = Slot.DeinitValueFn;
 const Free = Slot.Free;
@@ -16,18 +17,17 @@ const Mode = Slot.Mode;
 const Storage = Slot.Storage;
 const StorageKind = Slot.StorageKind;
 const StoredType = Slot.Result;
-const test_mod = @import("test.zig");
-const slotEventLog = test_mod.slotEventLog;
-const expectEventLog = test_mod.expectEventLog;
+const slotEventLog = @import("test.zig").slotEventLog;
+const expectEventLog = @import("test.zig").expectEventLog;
 
 pub fn initSlotFn(
     comptime T: type,
     comptime valueFn: *const ValueFn(T),
-    comptime deinit: ?DeinitPayloadFn,
+    comptime deinitPayload: ?DeinitPayloadFn,
 ) *const fn (*Context) anyerror!Slot.Result(T) {
     return struct {
         fn call(ctx: *Context) !Slot.Result(T) {
-            return try slot(T, ctx, valueFn, deinit);
+            return try slot(T, ctx, valueFn, deinitPayload);
         }
     }.call;
 }
@@ -38,9 +38,15 @@ pub fn slot(
     comptime T: type,
     ctx: *Context,
     valueFn: *const ValueFn(T),
-    deinit: ?DeinitPayloadFn,
+    deinitPayload: ?DeinitPayloadFn,
 ) !Slot.Result(T) {
-    return slotKeyed(T, ctx, valueFnCacheKey(valueFn), valueFn, deinit);
+    return slotKeyed(
+        T,
+        ctx,
+        valueFnCacheKey(valueFn),
+        valueFn,
+        deinitPayload,
+    );
 }
 
 pub fn slotKeyed(
@@ -48,7 +54,7 @@ pub fn slotKeyed(
     ctx: *Context,
     cache_key: usize,
     valueFn: *const ValueFn(T),
-    deinit: ?DeinitPayloadFn,
+    deinitPayload: ?DeinitPayloadFn,
 ) !Slot.Result(T) {
     ctx.mutex.lock();
 
@@ -73,7 +79,7 @@ pub fn slotKeyed(
         ctx,
         cache_key,
         valueFn,
-        deinit,
+        deinitPayload,
     );
 
     return new_slot.get(T);
@@ -105,11 +111,11 @@ pub fn deinitSlotValue(
                     // T is not a pointer, check for deinit method
                     if (comptime @typeInfo(T) == .@"struct" and
                         @hasDecl(T, "deinit"))
-                    {
-                        // For indirect, val should be single_ptr pointing to T
+                        {
+                            // For indirect, val should be single_ptr pointing to T
                         var mutable_value = value;
-                        mutable_value.deinit(_ctx);
-                    }
+                            mutable_value.deinit(_ctx);
+                        }
                 },
             }
         }
@@ -175,7 +181,7 @@ fn deinitIndirect(comptime T: type, comptime deinitFromUser: ?DeinitPayloadFn) D
     }.deinit;
 }
 
-test "Context.init, slotFn, Context.getSlot, Context.deinit" {
+test "lazily/slot.Context.init, slotFn, Context.getSlot, Context.deinit" {
     const ctx = try Context.init(std.testing.allocator);
     defer ctx.deinit();
     const getFoo = struct {
@@ -190,7 +196,7 @@ test "Context.init, slotFn, Context.getSlot, Context.deinit" {
     try std.testing.expect(ctx.getSlot(getFoo) != null);
 }
 
-test "Slot.emitChange" {
+test "lazily/slot.Slot.emitChange" {
     const ctx = try Context.init(std.testing.allocator);
     defer ctx.deinit();
 
@@ -257,4 +263,73 @@ test "Slot.emitChange" {
     try std.testing.expect(ctx.getSlot(getBar) != null);
     try std.testing.expect(ctx.getSlot(getBaz) != null);
     try expectEventLog(ctx, "baz|bar|foo|baz|bar|");
+}
+
+test "lazily/slot.Slot.touch" {
+    const ctx = try Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const getFoo = struct {
+        fn call(_ctx: *Context) !u8 {
+            try (try slotEventLog(_ctx)).append("foo|");
+            return 1;
+        }
+    }.call;
+    const foo = comptime initSlotFn(
+        u8,
+        getFoo,
+        null,
+    );
+
+    const getBar = struct {
+        fn call(_ctx: *Context) !u8 {
+            try (try slotEventLog(_ctx)).append("bar|");
+            return (try foo(_ctx)).* * 10;
+        }
+    }.call;
+    const bar = comptime initSlotFn(
+        u8,
+        getBar,
+        null,
+    );
+
+    const getBaz = struct {
+        fn call(_ctx: *Context) !u8 {
+            try (try slotEventLog(_ctx)).append("baz|");
+            return (try bar(_ctx)).* + 1;
+        }
+    }.call;
+    const baz = comptime initSlotFn(
+        u8,
+        getBaz,
+        null,
+    );
+
+    try std.testing.expectEqual(null, ctx.getSlot(getFoo));
+    try std.testing.expectEqual(null, ctx.getSlot(getBar));
+    try std.testing.expectEqual(null, ctx.getSlot(getBaz));
+    try expectEventLog(ctx, "");
+
+    try std.testing.expectEqual(11, (try baz(ctx)).*);
+    try std.testing.expect(ctx.getSlot(getFoo) != null);
+    try std.testing.expect(ctx.getSlot(getBar) != null);
+    try std.testing.expect(ctx.getSlot(getBaz) != null);
+    try expectEventLog(ctx, "baz|bar|foo|");
+
+    if (ctx.getSlot(getFoo)) |foo_slot| {
+        foo_slot.touch();
+    } else {
+        return error.FooNotFound;
+    }
+
+    try std.testing.expectEqual(null, ctx.getSlot(getFoo));
+    try std.testing.expectEqual(null, ctx.getSlot(getBar));
+    try std.testing.expectEqual(null, ctx.getSlot(getBaz));
+    try expectEventLog(ctx, "baz|bar|foo|");
+
+    try std.testing.expectEqual(11, (try baz(ctx)).*);
+    try std.testing.expect(ctx.getSlot(getFoo) != null);
+    try std.testing.expect(ctx.getSlot(getBar) != null);
+    try std.testing.expect(ctx.getSlot(getBaz) != null);
+    try expectEventLog(ctx, "baz|bar|foo|baz|bar|foo|");
 }

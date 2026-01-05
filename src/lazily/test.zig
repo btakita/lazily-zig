@@ -1,11 +1,9 @@
 const std = @import("std");
-const ctx_mod = @import("context.zig");
-const Context = ctx_mod.Context;
-const ValueFn = ctx_mod.ValueFn;
-const String = ctx_mod.String;
-const slot_mod = @import("slot.zig");
-const deinitSlotValue = slot_mod.deinitSlotValue;
-const initSlotFn = slot_mod.initSlotFn;
+const Context = @import("context.zig").Context;
+const ValueFn = @import("context.zig").ValueFn;
+const String = @import("context.zig").String;
+const deinitSlotValue = @import("slot.zig").deinitSlotValue;
+const initSlotFn = @import("slot.zig").initSlotFn;
 
 pub const List = std.array_list.Managed(String);
 

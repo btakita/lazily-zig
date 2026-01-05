@@ -11,8 +11,12 @@ const StringView = lazily.StringView;
 const AuthToken = OwnedString;
 
 fn authenticate() []const u8 {
-    std.debug.print("Authenticating...\n", .{});
     return "very_secret_token";
+}
+
+fn getAuthToken(ctx: *Context) !AuthToken {
+    const auth_token = authenticate();
+    return AuthToken.managed(try ctx.allocator.dupe(u8, auth_token));
 }
 
 const deinitAuthToken = deinitSlotValue(
@@ -20,17 +24,12 @@ const deinitAuthToken = deinitSlotValue(
     null,
 );
 
-fn getAuthToken(ctx: *Context) !AuthToken {
-    const auth_token = authenticate();
-    return AuthToken.managed(try ctx.allocator.dupe(u8, auth_token));
-}
-
 /// Lazily get an Auth Token using the lazily.slot function.
 /// Which accepts separate value getter function and optional deinit functions.
 pub fn slotAuthToken(ctx: *Context) !*AuthToken {
     return try slot(AuthToken, ctx, getAuthToken, deinitAuthToken);
 }
-test "slotAuthToken" {
+test "examples/auth: slotAuthToken" {
     const ctx = try Context.init(std.testing.allocator);
     defer ctx.deinit();
     const token = try slotAuthToken(ctx);
@@ -46,7 +45,7 @@ pub const slotAuthToken_initSlotFn = initSlotFn(
     getAuthToken,
     deinitAuthToken,
 );
-test "initSlotFn (slotAuthToken_initSlotFn)" {
+test "examples/auth: initSlotFn (slotAuthToken_initSlotFn)" {
     const ctx = try Context.init(std.testing.allocator);
     defer ctx.deinit();
     const token = try slotAuthToken_initSlotFn(ctx);

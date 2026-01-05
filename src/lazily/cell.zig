@@ -1,25 +1,22 @@
 const std = @import("std");
 const build_options = @import("build_options");
-const ctx_mod = @import("context.zig");
-const Context = ctx_mod.Context;
-const currentSlotFor = ctx_mod.currentSlotFor;
-const Owned = ctx_mod.Owned;
-const OwnedString = ctx_mod.OwnedString;
-const Slot = ctx_mod.Slot;
-const String = ctx_mod.String;
-const subscriberKey = ctx_mod.subscriberKey;
-const SubscriberKey = ctx_mod.SubscriberKey;
-const ValueFn = ctx_mod.ValueFn;
-const valueFnCacheKey = ctx_mod.valueFnCacheKey;
-const slot_mod = @import("slot.zig");
-const deinitSlotValue = slot_mod.deinitSlotValue;
-const slot = slot_mod.slot;
-const slotKeyed = slot_mod.slotKeyed;
-const initSlotFn = slot_mod.initSlotFn;
+const Context = @import("context.zig").Context;
+const currentSlotFor = @import("context.zig").currentSlotFor;
+const Owned = @import("context.zig").Owned;
+const OwnedString = @import("context.zig").OwnedString;
+const Slot = @import("context.zig").Slot;
+const String = @import("context.zig").String;
+const subscriberKey = @import("context.zig").subscriberKey;
+const SubscriberKey = @import("context.zig").SubscriberKey;
+const ValueFn = @import("context.zig").ValueFn;
+const valueFnCacheKey = @import("context.zig").valueFnCacheKey;
+const deinitSlotValue = @import("slot.zig").deinitSlotValue;
+const slot = @import("slot.zig").slot;
+const slotKeyed = @import("slot.zig").slotKeyed;
+const initSlotFn = @import("slot.zig").initSlotFn;
 const DeinitPayloadFn = Slot.DeinitPayloadFn;
-const test_mod = @import("test.zig");
-const slotEventLog = test_mod.slotEventLog;
-const expectEventLog = test_mod.expectEventLog;
+const slotEventLog = @import("test.zig").slotEventLog;
+const expectEventLog = @import("test.zig").expectEventLog;
 
 pub fn DeinitCellValueFn(comptime T: type) type {
     return *const fn (*Cell(T)) void;
@@ -137,8 +134,9 @@ pub fn Cell(comptime T: type) type {
     };
 }
 
-test "Cell: subscribe dedup" {
-    const ctx = try Context.init(std.testing.allocator);
+test "lazily/cell.Cell: subscribe dedup" {
+    const allocator = std.testing.allocator;
+    const ctx = try Context.init(allocator);
     defer ctx.deinit();
 
     var test_cell = try Cell(i32).init(ctx, struct {
@@ -201,8 +199,9 @@ pub fn cell(
     return _cell;
 }
 
-test "cell: returns Cell(T) with initial value and caches computation" {
-    const ctx = try Context.init(std.testing.allocator);
+test "lazily/cell.cell: returns Cell(T) with initial value and caches computation" {
+    const allocator = std.testing.allocator;
+    const ctx = try Context.init(allocator);
     defer ctx.deinit();
 
     const State = struct {
@@ -242,8 +241,9 @@ pub fn initCellFn(
     }.call;
 }
 
-test "cellFn: get/set + invalidate cache" {
-    const ctx = try Context.init(std.testing.allocator);
+test "lazily/cell.cellFn: get/set + invalidate cache" {
+    const allocator = std.testing.allocator;
+    const ctx = try Context.init(allocator);
     defer ctx.deinit();
 
     const hello = comptime initCellFn(
@@ -369,76 +369,9 @@ test "cellFn: get/set + invalidate cache" {
     try expectEventLog(ctx, "greeting|hello|name|greetingAndResponse|response|greeting|greeting|greetingAndResponse|");
 }
 
-test "multithreaded slot contention" {
-    if (!build_options.multi_threaded) {
-        return error.SkipZigTest;
-    }
+test "lazily/cell.thread_safe Cell updates" {
+    if (!build_options.thread_safe) return error.SkipZigTest;
 
-    // We must use a thread-safe allocator for multithreaded tests.
-    var ts_allocator = std.heap.ThreadSafeAllocator{
-        .child_allocator = std.testing.allocator,
-    };
-    const allocator = ts_allocator.allocator();
-
-    const ctx = try Context.init(allocator);
-    defer ctx.deinit();
-
-    const SharedState = struct {
-        // Track how many times the actual computation ran
-        computations: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
-
-        fn compute(_: *Context) anyerror!i32 {
-            // Simulate some work
-            std.Thread.sleep(10 * std.time.ns_per_ms);
-            // This is a global pointer in the test, so we can access it
-            // via a capture or a static.
-            return 42;
-        }
-    };
-
-    var state = SharedState{};
-
-    // We define the valueFn here to increment the counter
-    const valueFn = struct {
-        var static_state: *SharedState = undefined;
-        fn call(_: *Context) anyerror!i32 {
-            _ = static_state.computations.fetchAdd(1, .seq_cst);
-            std.Thread.sleep(50 * std.time.ns_per_ms);
-            return 42;
-        }
-    };
-    valueFn.static_state = &state;
-
-    const num_threads = 8;
-    var threads: [num_threads]std.Thread = undefined;
-
-    // Spawn multiple threads all trying to get the same slot at once
-    for (0..num_threads) |i| {
-        threads[i] = try std.Thread.spawn(.{}, struct {
-            fn run(c: *Context, f: *const fn (*Context) anyerror!i32) void {
-                const val = slot(i32, c, f, null) catch unreachable;
-                std.testing.expectEqual(@as(i32, 42), val.*) catch @panic("Value mismatch");
-            }
-        }.run, .{ ctx, valueFn.call });
-    }
-
-    for (threads) |t| t.join();
-
-    // Verification:
-    // 1. All threads should have received the correct value (checked in thread).
-    // 2. The Context cache should only contain ONE slot for this function.
-    // 3. While valueFn might have RUN multiple times due to the race,
-    //    our logic in initKeyed ensures only one was kept and others were destroyed.
-
-    // Check that we can still get the value
-    const final_val = try slot(i32, ctx, valueFn.call, null);
-    try std.testing.expectEqual(@as(i32, 42), final_val.*);
-}
-
-test "multithreaded Cell updates" {
-    if (!build_options.multi_threaded) {
-        return error.SkipZigTest;
-    }
     var ts_allocator = std.heap.ThreadSafeAllocator{
         .child_allocator = std.testing.allocator,
     };

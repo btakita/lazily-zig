@@ -1,13 +1,14 @@
 const std = @import("std");
 const build_options = @import("build_options");
+const FfiResult = @import("ffi.zig").FfiResult;
 
 /// Context with lazy cache
 pub const Context = struct {
     allocator: std.mem.Allocator,
     // Function pointer -> cached result
     cache: std.AutoHashMap(usize, *Slot),
-    // Use a real Mutex if multi_threaded is true, otherwise use a "no-op" struct
-    mutex: if (build_options.multi_threaded) std.Thread.Mutex else struct {
+    // Use a real Mutex if thread_safe is true, otherwise use a "no-op" struct
+    mutex: if (build_options.thread_safe) std.Thread.Mutex else struct {
         pub fn lock(_: *@This()) void {}
         pub fn unlock(_: *@This()) void {}
     } = .{},
@@ -104,7 +105,7 @@ pub const Slot = struct {
     ptr_size: std.builtin.Type.Pointer.Size,
     change_subscribers: std.AutoHashMap(*Slot, void),
     parents: std.AutoHashMap(*Slot, void),
-    deinit: ?*const fn (*Slot) void,
+    deinitPayload: ?*const fn (*Slot) void,
     free: ?*const fn (std.mem.Allocator, *anyopaque) void = null,
 
     pub fn init(
@@ -148,7 +149,7 @@ pub const Slot = struct {
                 *Slot,
                 void,
             ).init(ctx.allocator),
-            .deinit = deinitPayload,
+            .deinitPayload = deinitPayload,
             .free = if (mode == .indirect) free else null,
         };
 
@@ -167,7 +168,11 @@ pub const Slot = struct {
         defer popTracking(&frame);
 
         const value = try valueFn(ctx);
-        const stored_value = try Storage.toStoredType(T, ctx, value);
+        const stored_value = try Storage.toStoredType(
+            T,
+            ctx,
+            value,
+        );
         self.value_fn_ptr = @ptrCast(@constCast(valueFn));
 
         self.storage = Storage.init(
@@ -250,12 +255,39 @@ pub const Slot = struct {
         _ = child.parents.remove(self);
     }
 
+    /// Thread-safe call to Slot.touchUnlocked.
+    pub fn touch(self: *Slot) void {
+        self.ctx.mutex.lock();
+        defer self.ctx.mutex.unlock();
+        self.touchUnlocked();
+    }
+
+    /// Slot.touchUnlocked expires self and expires all dependent Slots.
+    /// See Slot.subscribeChange and Slot.emitChangeUnlocked.
+    pub fn touchUnlocked(self: *Slot) void {
+        self.destroyUnlocked(true);
+    }
+
+    /// Thread-safe call to Slot.emitChangeUnlocked.
     pub fn emitChange(self: *Slot) void {
         self.ctx.mutex.lock();
         defer self.ctx.mutex.unlock();
         self.emitChangeUnlocked();
     }
 
+    /// Emits the change event to all change_subscribers. See Slot.subscribeChange.
+    /// The change event will expire all subscribed Slots.
+    ///
+    /// The current behavior of expiration is to destroy the Slot instance...
+    /// Where the Slot is reinstantiated the next time the slot function is called.
+    ///
+    /// Future plans include making the Slot instance remain but with its value cleared.
+    /// This plan will allow a Cell to keep any value changes using `Cell.set` and for the Reactor implementation.
+    ///
+    /// Note this function doesn't destroy the Slot itself. See Slot.touch if you want this behavior.
+    ///
+    /// TODO: Slot will remain when expired. Clear value when expired.
+    /// TODO: Provide methods in Cell to track a Slot used to create the value passed into Cell.set.
     pub fn emitChangeUnlocked(self: *Slot) void {
         var iter = self.change_subscribers.keyIterator();
         while (iter.next()) |ptr| {
@@ -301,8 +333,8 @@ pub const Slot = struct {
                 }
             }
 
-            if (self.deinit) |deinit_fn| {
-                deinit_fn(self);
+            if (self.deinitPayload) |deinitPayload| {
+                deinitPayload(self);
             }
             if (self.mode == .indirect) {
                 if (self.free) |free_fn| {
@@ -367,9 +399,9 @@ pub const Slot = struct {
             return switch (comptime Mode(T)) {
                 .direct => value,
                 .indirect => blk: {
-                    const p = try ctx.allocator.create(T);
-                    p.* = value;
-                    break :blk p;
+                    const stored_value = try ctx.allocator.create(T);
+                    stored_value.* = value;
+                    break :blk stored_value;
                 },
             };
         }
@@ -502,8 +534,24 @@ pub fn currentSlotFor(ctx: *Context) ?*Slot {
     return null;
 }
 
-export fn initContext() ?*Context {
-    return Context.init(std.heap.page_allocator) catch null;
+export fn initContext() FfiResult {
+    // TODO: Option to use c_allocator.
+    // - Max throughput
+    // - Multi-thread scaling
+    // - Long running process stability
+    // TODO: Option to use ArenaAllocator
+    // - Purely Additive Caching (Immutable Graphs)
+    // - Batch Jobs
+    const allocator = std.heap.c_allocator;
+
+    const ctx = Context.init(allocator) catch |err| {
+        return FfiResult.initError(
+            @intFromError(err),
+            "Failed to initialize Context",
+        );
+    };
+
+    return FfiResult.initSuccess(ctx);
 }
 comptime {
     @export(&initContext, .{ .name = "init_context" });

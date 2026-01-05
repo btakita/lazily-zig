@@ -1,26 +1,23 @@
 //! By convention, root.zig is the root source file when making a library.
 const std = @import("std");
-const cell_mod = @import("./lazily/cell.zig");
-pub const cell = cell_mod.cell;
-pub const CellFn = cell_mod.CellFn;
-pub const Cell = cell_mod.Cell;
-pub const initCellFn = cell_mod.initCellFn;
-const ctx_mod = @import("./lazily/context.zig");
-pub const Context = ctx_mod.Context;
-pub const Owned = ctx_mod.Owned;
-pub const Slot = ctx_mod.Slot;
-pub const OwnedString = ctx_mod.OwnedString;
-pub const valueFnCacheKey = ctx_mod.valueFnCacheKey;
-pub const ValueFn = ctx_mod.ValueFn;
-const slot_mod = @import("./lazily/slot.zig");
-pub const deinitSlotValue = slot_mod.deinitSlotValue;
-pub const slot = slot_mod.slot;
-pub const slotKeyed = slot_mod.slotKeyed;
-pub const initSlotFn = slot_mod.initSlotFn;
-pub const StringView = slot_mod.StringView;
-const test_mod = @import("./lazily/test.zig");
-const slotEventLog = test_mod.slotEventLog;
-const expectEventLog = test_mod.expectEventLog;
+pub const cell = @import("./lazily/cell.zig").cell;
+pub const CellFn = @import("./lazily/cell.zig").CellFn;
+pub const Cell = @import("./lazily/cell.zig").Cell;
+pub const initCellFn = @import("./lazily/cell.zig").initCellFn;
+pub const Context = @import("./lazily/context.zig").Context;
+pub const Owned = @import("./lazily/context.zig").Owned;
+pub const OwnedString = @import("./lazily/context.zig").OwnedString;
+pub const Slot = @import("./lazily/context.zig").Slot;
+pub const String = @import("./lazily/context.zig").String;
+pub const valueFnCacheKey = @import("./lazily/context.zig").valueFnCacheKey;
+pub const ValueFn = @import("./lazily/context.zig").ValueFn;
+pub const deinitSlotValue = @import("./lazily/slot.zig").deinitSlotValue;
+pub const slot = @import("./lazily/slot.zig").slot;
+pub const slotKeyed = @import("./lazily/slot.zig").slotKeyed;
+pub const initSlotFn = @import("./lazily/slot.zig").initSlotFn;
+pub const StringView = @import("./lazily/slot.zig").StringView;
+pub const slotEventLog = @import("./lazily/test.zig").slotEventLog;
+pub const expectEventLog = @import("./lazily/test.zig").expectEventLog;
 
 test {
     std.testing.refAllDecls(@This());

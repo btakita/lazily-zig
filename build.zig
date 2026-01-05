@@ -1,3 +1,4 @@
+const builtin = @import("builtin");
 const std = @import("std");
 
 // Although this function looks imperative, it does not perform the build
@@ -17,13 +18,13 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const multi_threaded = b.option(
+    const thread_safe = b.option(
         bool,
-        "multi_threaded",
+        "thread_safe",
         "Enable thread-safety features (default: true)",
     ) orelse true;
     const build_options = b.addOptions();
-    build_options.addOption(bool, "multi_threaded", multi_threaded);
+    build_options.addOption(bool, "thread_safe", thread_safe);
 
     // It's also possible to define more custom flags to toggle optional features
     // of this build script using `b.option()`. All defined flags (including
@@ -46,6 +47,7 @@ pub fn build(b: *std.Build) void {
         // the root file.
         .root_source_file = b.path("src/root.zig"),
         .target = target,
+        .link_libc = true,
     });
     mod.addOptions("build_options", build_options);
 
@@ -56,6 +58,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/root.zig"),
             .target = target,
             .optimize = optimize,
+            .link_libc = true,
         }),
     });
     b.installArtifact(lazily_lib);
@@ -99,6 +102,7 @@ pub fn build(b: *std.Build) void {
                 // importing modules from different packages).
                 .{ .name = "lazily", .module = mod },
             },
+            .link_libc = true,
         }),
     });
 
@@ -134,19 +138,19 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
-    const cli_test_filter = b.option(
+    const cli_filters = b.option(
         []const []const u8,
-        "test_filter",
+        "filters",
         "Test name filters",
     );
-    const test_filter = cli_test_filter orelse &.{};
+    const filters = cli_filters orelse &.{};
 
     // Creates an executable that will run `test` blocks from the provided module.
     // Here `mod` needs to define a target, which is why earlier we made sure to
     // set the relative field.
     const mod_tests = b.addTest(.{
         .root_module = mod,
-        .filters = test_filter,
+        .filters = filters,
     });
 
     // A run step that will run the test executable.
@@ -157,7 +161,7 @@ pub fn build(b: *std.Build) void {
     // hence why we have to create two separate ones.
     const exe_tests = b.addTest(.{
         .root_module = exe.root_module,
-        .filters = test_filter,
+        .filters = filters,
     });
 
     // A run step that will run the second test executable.
@@ -171,32 +175,36 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "lazily", .module = mod },
             },
+            .link_libc = true,
         },
     );
     const example_auth_mod_tests = b.addTest(.{
         .root_module = example_auth_mod,
-        .filters = test_filter,
+        .filters = filters,
     });
     const run_example_auth_mod_tests = b.addRunArtifact(example_auth_mod_tests);
     const install_example_auth_mod_tests = b.addInstallArtifact(
         example_auth_mod_tests,
         .{
             .dest_dir = .{
-                .override = .{ .custom = "tests" },
+                .override = .{
+                    .custom = "tests",
+                },
             },
         },
     );
 
-    const example_cells_mod = b.addModule("lazily_example_auth", .{
-        .root_source_file = b.path("src/examples/auth/root.zig"),
+    const example_cells_mod = b.addModule("lazily_example_cells", .{
+        .root_source_file = b.path("src/examples/cells/root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "lazily", .module = mod },
         },
+        .link_libc = true,
     });
     const example_cells_mod_tests = b.addTest(.{
         .root_module = example_cells_mod,
-        .filters = test_filter,
+        .filters = filters,
     });
     const run_example_cells_mod_tests = b.addRunArtifact(example_cells_mod_tests);
     const install_example_cells_mod_tests = b.addInstallArtifact(
@@ -216,6 +224,55 @@ pub fn build(b: *std.Build) void {
     run_test.dependOn(&run_exe_tests.step);
     run_test.dependOn(&run_example_auth_mod_tests.step);
     run_test.dependOn(&run_example_cells_mod_tests.step);
+
+    const zig_current = builtin.zig_version;
+
+    if (zig_current.minor >= 16) {
+        std.debug.print("0.16 build\n", .{});
+        const cell_0_16_mod = b.createModule(.{
+            .root_source_file = b.path("src/lazily/cell_0_16_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        cell_0_16_mod.addOptions("build_options", build_options);
+        const cell_0_16_tests = b.addTest(.{
+            .root_module = cell_0_16_mod,
+            .filters = filters,
+        });
+        const run_cell_0_16_tests = b.addRunArtifact(cell_0_16_tests);
+        run_test.dependOn(&run_cell_0_16_tests.step);
+
+        const slot_0_16_mod = b.createModule(.{
+            .root_source_file = b.path("src/lazily/slot_0_16_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        slot_0_16_mod.addOptions("build_options", build_options);
+        const slot_0_16_tests = b.addTest(.{
+            .root_module = slot_0_16_mod,
+            .filters = filters,
+        });
+        const run_slot_0_16_tests = b.addRunArtifact(slot_0_16_tests);
+        run_test.dependOn(&run_slot_0_16_tests.step);
+    }
+    if (zig_current.minor == 15) {
+        std.debug.print("0.15 build\n", .{});
+        const cell_0_15_mod = b.createModule(.{
+            .root_source_file = b.path("src/lazily/cell_0_15_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        cell_0_15_mod.addOptions("build_options", build_options);
+        const cell_0_15_tests = b.addTest(.{
+            .root_module = cell_0_15_mod,
+            .filters = filters,
+        });
+        const run_cell_0_15_tests = b.addRunArtifact(cell_0_15_tests);
+        run_test.dependOn(&run_cell_0_15_tests.step);
+    }
 
     const install_test = b.step(
         "install_test",
