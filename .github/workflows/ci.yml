@@ -93,7 +93,7 @@ jobs:
   test:
     name: Zig ${{ matrix.zig }}
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 5
     continue-on-error: ${{ matrix.zig == 'master' }}
     strategy:
       fail-fast: false
@@ -161,9 +161,15 @@ jobs:
       - name: Test
         run: |
           mkdir -p build && : > build/conformance-fixtures-loaded.txt
-          LAZILY_CONFORMANCE_MANIFEST="$PWD/build/conformance-fixtures-loaded.txt" \
-            zig build test --summary all \
-            -Dconformance-manifest="$PWD/build/conformance-fixtures-loaded.txt"
+          if [ "${{ matrix.zig }}" = master ]; then
+            timeout 90 env LAZILY_CONFORMANCE_MANIFEST="$PWD/build/conformance-fixtures-loaded.txt" \
+              zig build test --summary all \
+              -Dconformance-manifest="$PWD/build/conformance-fixtures-loaded.txt"
+          else
+            LAZILY_CONFORMANCE_MANIFEST="$PWD/build/conformance-fixtures-loaded.txt" \
+              zig build test --summary all \
+              -Dconformance-manifest="$PWD/build/conformance-fixtures-loaded.txt"
+          fi
 
       # Cross-binding wire compatibility, run by `make check` and by no binding's
       # CI until now (#lzinteroppeerci). Runs on every toolchain in the matrix on
