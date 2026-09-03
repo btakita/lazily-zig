@@ -202,6 +202,28 @@ pub const WorkQueueDeadLetterReason = work_queue.WorkQueueDeadLetterReason;
 pub const WorkQueueError = work_queue.WorkQueueError;
 pub const WorkQueueVersions = work_queue.WorkQueueVersions;
 
+// Latest-value durable egress: one in-flight envelope per key, pending
+// supersession, and generation-fenced acknowledgements.
+pub const latest_durable_projection_core = @import("./lazily/latest_durable_projection_core.zig");
+pub const LatestDurableProjectionCore = latest_durable_projection_core.LatestDurableProjectionCore;
+pub const LatestDurableRevision = latest_durable_projection_core.LatestDurableRevision;
+pub const LatestDurableEnvelope = latest_durable_projection_core.LatestDurableEnvelope;
+pub const LatestDurableKeyState = latest_durable_projection_core.LatestDurableKeyState;
+pub const LatestDurableSnapshot = latest_durable_projection_core.LatestDurableSnapshot;
+pub const LatestDurableUpsert = latest_durable_projection_core.LatestDurableUpsert;
+pub const LatestDurableClaim = latest_durable_projection_core.LatestDurableClaim;
+pub const LatestDurableAck = latest_durable_projection_core.LatestDurableAck;
+pub const LatestDurableFailure = latest_durable_projection_core.LatestDurableFailure;
+pub const LatestDurableReconnect = latest_durable_projection_core.LatestDurableReconnect;
+pub const LatestDurableChange = latest_durable_projection_core.LatestDurableChange;
+pub const latest_durable_projection = @import("./lazily/latest_durable_projection.zig");
+pub const LatestDurableProjection = latest_durable_projection.LatestDurableProjection;
+pub const thread_safe_latest_durable_projection = @import("./lazily/thread_safe_latest_durable_projection.zig");
+pub const ThreadSafeLatestDurableProjection = thread_safe_latest_durable_projection.ThreadSafeLatestDurableProjection;
+pub const async_latest_durable_projection = @import("./lazily/async_latest_durable_projection.zig");
+pub const AsyncLatestDurableProjection = async_latest_durable_projection.AsyncLatestDurableProjection;
+pub const latest_durable_projection_family_conformance = @import("./lazily/latest_durable_projection_family_conformance.zig");
+
 // The transport-agnostic reactive ingress family (`#designimplementtransport`).
 // `ingress_core` is the graph-agnostic admission algebra; the three shells own
 // the graph and clear exactly the reader-kind set the core reports.
